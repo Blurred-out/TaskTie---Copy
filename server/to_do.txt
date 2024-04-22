@@ -1,0 +1,12 @@
+at the login passport authentication.. 
+rn its only been set up for company logins..
+i am only sending an error if email/password is wrong..
+but what about userType??
+
+so use innerjoin in sql to get all the users (cmpny, man, da, out)
+and check if email and password match.. if both of them are correct then proceed to check if the uesrType == db stored uesrType
+and if thats not correct then send a message incorrect usertype
+
+i think this is less secure so maybe i should not resort to this..
+lets see.. i am thinking of displaying invalid credentials 
+its more secure;
