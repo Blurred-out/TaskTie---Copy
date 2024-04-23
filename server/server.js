@@ -222,21 +222,43 @@ app.get("/getTeamName", async(req, res) => {
     }
 })
 
-app.post("/login", upload.none(), (req, res, next) => {
-    passport.authenticate("local", (err, user, info) => {
-        if(err){
-            return next(err);
-        }
+// app.post("/login", upload.none(), (req, res, next) => {
+//     passport.authenticate("local", (err, user, info) => {
+//         if(err){
+//             return next(err);
+//         }
+        
+//         if (!user){
+//             // const message = info && info.message ? info.message : "Incorrect credentials"
+//             return res.status(401).json({message: 'Incorrect credentials'});
+//         }
+//         if(req.isAuthenticated){
+//             req.user = user;
+//             console.log("info: ", info)
+//         }
+//         const {message, redirectTo} = info;
+//         console.log("req.user: ",req.user)
+//         res.status(200).json({message, redirectTo});
+//     })(req, res, next);
+// })
 
-        if (!user){
-            // const message = info && info.message ? info.message : "Incorrect credentials"
+app.post("/login", upload.none(), passport.authenticate("local"), (req, res) => {
+    try{
+        const { user, authInfo } = req;
+
+        if(!user){
             return res.status(401).json({message: 'Incorrect credentials'});
         }
 
-        const {message, redirectTo} = info;
-        res.status(200).json({message, redirectTo});
-    })(req, res, next);
-})
+        const { message, redirectTo } = authInfo || {}
+
+        res.status(200).json({ message, redirectTo, user });
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({message: "internal server error"})
+    }
+});
+
 
 app.post("/logout", (req, res) => {
     try {
@@ -255,16 +277,9 @@ app.post("/logout", (req, res) => {
     }
 })
 
-function isAuthenticated(req, res, next){
-    if(req.isAuthenticated()){
-        return next();
-    }
-    res.status(401).json({message: "Unauthorized"})
-}
-
-app.get("/currentUser", isAuthenticated, (req, res) => {
-    const currentUser = req.user;
-    res.status(200).json(currentUser);
+app.get("/currentUser", (req, res) => {
+    // console.log("current_user", req.user)
+    res.status(200).json(req.user);
 })
 
 passport.use("local",
