@@ -10,3 +10,27 @@ and if thats not correct then send a message incorrect usertype
 i think this is less secure so maybe i should not resort to this..
 lets see.. i am thinking of displaying invalid credentials 
 its more secure;
+
+
+CREATE TABLE chat.users (
+	id SERIAL PRIMARY KEY,
+	user_id TEXT,
+	FOREIGN KEY (user_id) REFERENCES common_ids(user_id) ON DELETE CASCADE
+);
+
+CREATE TABLE chat.conversations(
+	id SERIAL PRIMARY KEY,
+	sender_id TEXT,
+	receiver_id TEXT,
+	FOREIGN KEY (sender_id) REFERENCES chat.users(user_id) ON DELETE CASCADE,
+	FOREIGN KEY (receiver_id) REFERENCES chat.users(user_id) ON DELETE CASCADE
+)
+
+CREATE TABLE chat.messages(
+	id SERIAL PRIMARY KEY,
+	conversation_id INT,
+	sender_id TEXT REFERENCES chat.users(user_id),
+	receiver_id TEXT REFERENCES chat.users(user_id),
+	text TEXT,
+	timestamp TIMESTAMP
+)

@@ -222,32 +222,12 @@ app.get("/getTeamName", async(req, res) => {
     }
 })
 
-// app.post("/login", upload.none(), (req, res, next) => {
-//     passport.authenticate("local", (err, user, info) => {
-//         if(err){
-//             return next(err);
-//         }
-        
-//         if (!user){
-//             // const message = info && info.message ? info.message : "Incorrect credentials"
-//             return res.status(401).json({message: 'Incorrect credentials'});
-//         }
-//         if(req.isAuthenticated){
-//             req.user = user;
-//             console.log("info: ", info)
-//         }
-//         const {message, redirectTo} = info;
-//         console.log("req.user: ",req.user)
-//         res.status(200).json({message, redirectTo});
-//     })(req, res, next);
-// })
-
 app.post("/login", upload.none(), passport.authenticate("local"), (req, res) => {
     try{
         const { user, authInfo } = req;
 
         if(!user){
-            return res.status(401).json({message: 'Incorrect credentials'});
+            return res.sendStatus(401)
         }
 
         const { message, redirectTo } = authInfo || {}
@@ -258,7 +238,6 @@ app.post("/login", upload.none(), passport.authenticate("local"), (req, res) => 
         res.status(500).json({message: "internal server error"})
     }
 });
-
 
 app.post("/logout", (req, res) => {
     try {
@@ -273,8 +252,72 @@ app.post("/logout", (req, res) => {
         });
     } catch(err) {
         console.error("Unexpected error while logging out:", err);
-        res.status(500).send("Internal server error"); // Send a response in case of error
+        res.status(500).send("Internal server error"); // Send a result in case of error
     }
+})
+
+app.post("/chatListData", async (req, res) => {
+    const {code, id} = req.body
+    console.log("id", id);
+    const teamResult = await db.query("SELECT * FROM team_details WHERE company_code = $1", [code])
+
+    let data = await Promise.all(teamResult.rows.map(async (team) => {
+        let managerResult = await db.query("SELECT * FROM manager_details WHERE team_code = $1", [team.team_code])
+        // let deliveryAgentResult = await db.query("SELECT * FROM delivery_agent_details WHERE team_code = $1", [team.team_code])
+        // let outletResult = await db.query("SELECT * FROM outlet_details WHERE team_code = $1", [team.team_code])
+        
+        let managerData;
+        let message;
+        if(managerResult.rows.length > 0){
+            managerData = managerResult.rows[0];
+            const messageData = await db.query(
+                `SELECT m.*
+                FROM chat.messages m
+                INNER JOIN (
+                    SELECT conversation_id, MAX(timestamp) AS max_timestamp
+                    FROM chat.messages
+                    GROUP BY conversation_id
+                ) latest ON m.conversation_id = latest.conversation_id AND m.timestamp = latest.max_timestamp
+                WHERE m.conversation_id = $1;
+                `, [id + "_" + managerData.id])
+
+            if(messageData.rows.length > 0){
+                const {text, timestamp} = messageData.rows[0]
+                message = {text, timestamp, role: "manager"}
+            } else {
+                message = {
+                    text: "",
+                    timestamp: null,
+                    role: "manager"
+                }
+            }
+        }
+
+        // if(deliveryAgentResult.rows.length > 0){
+        //     // console.log(deliveryAgentResult.rows)
+        // }
+        // if(outletResult.rows.length > 0){
+        //     // console.log(outletResult.rows)
+        // }
+        let chatData = managerData ? {
+            teamName: team.team_name,
+            teamCode: team.team_code,
+            teamData: [
+                {
+                    name: managerData.name,
+                    id: managerData.id,
+                    img: managerData.logo,
+                    ...message
+                }
+            ]
+        } : null
+        return chatData;
+    }))
+
+    // data.map((entry) => {
+    //     console.log("entry: ", entry.teamData)
+    // })
+    res.status(200).json(data)
 })
 
 app.get("/currentUser", (req, res) => {
