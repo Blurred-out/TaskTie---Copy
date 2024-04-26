@@ -260,7 +260,7 @@ app.post("/chatListData", async (req, res) => {
     const {code, id} = req.body
     console.log("id", id);
     const teamResult = await db.query("SELECT * FROM team_details WHERE company_code = $1", [code])
-    
+
     async function fetchDetails(tableName, teamCode, id) {
         const result = await db.query(`SELECT * FROM ${tableName} WHERE team_code = $1`, [teamCode]);
         let data = null;
@@ -268,6 +268,7 @@ app.post("/chatListData", async (req, res) => {
         let role = null;
         if (result.rows.length > 0) {
             const rowData = result.rows[0];
+            // returns the latest message of a user
             const messageData = await db.query(`
                 SELECT m.*
                 FROM chat.messages m
@@ -313,6 +314,7 @@ app.post("/chatListData", async (req, res) => {
     }
     
     let data = await Promise.all(teamResult.rows.map(async (team) => {
+        //fetches all 3 types of user details
         const managerData = await fetchDetails("manager_details", team.team_code, id);
         const deliveryAgentData = await fetchDetails("delivery_agent_details", team.team_code, id);
         const outletData = await fetchDetails("outlet_details", team.team_code, id);
@@ -326,13 +328,12 @@ app.post("/chatListData", async (req, res) => {
             };
         }
         return chatData;
-    }));
+    })); 
 
     res.status(200).json(data)
 })
 
 app.get("/currentUser", (req, res) => {
-    // console.log("current_user", req.user)
     res.status(200).json(req.user);
 })
 
