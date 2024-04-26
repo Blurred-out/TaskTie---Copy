@@ -260,18 +260,16 @@ app.post("/chatListData", async (req, res) => {
     const {code, id} = req.body
     console.log("id", id);
     const teamResult = await db.query("SELECT * FROM team_details WHERE company_code = $1", [code])
-
-    let data = await Promise.all(teamResult.rows.map(async (team) => {
-        let managerResult = await db.query("SELECT * FROM manager_details WHERE team_code = $1", [team.team_code])
-        // let deliveryAgentResult = await db.query("SELECT * FROM delivery_agent_details WHERE team_code = $1", [team.team_code])
-        // let outletResult = await db.query("SELECT * FROM outlet_details WHERE team_code = $1", [team.team_code])
-        
-        let managerData;
-        let message;
-        if(managerResult.rows.length > 0){
-            managerData = managerResult.rows[0];
-            const messageData = await db.query(
-                `SELECT m.*
+    
+    async function fetchDetails(tableName, teamCode, id) {
+        const result = await db.query(`SELECT * FROM ${tableName} WHERE team_code = $1`, [teamCode]);
+        let data = null;
+        let message = null;
+        let role = null;
+        if (result.rows.length > 0) {
+            const rowData = result.rows[0];
+            const messageData = await db.query(`
+                SELECT m.*
                 FROM chat.messages m
                 INNER JOIN (
                     SELECT conversation_id, MAX(timestamp) AS max_timestamp
@@ -279,44 +277,57 @@ app.post("/chatListData", async (req, res) => {
                     GROUP BY conversation_id
                 ) latest ON m.conversation_id = latest.conversation_id AND m.timestamp = latest.max_timestamp
                 WHERE m.conversation_id = $1;
-                `, [id + "_" + managerData.id])
-
-            if(messageData.rows.length > 0){
-                const {text, timestamp} = messageData.rows[0]
-                message = {text, timestamp, role: "manager"}
+            `, [id + "_" + rowData.id]);
+    
+            if (messageData.rows.length > 0) {
+                const { text, timestamp } = messageData.rows[0];
+                message = { text, timestamp };
             } else {
-                message = {
-                    text: "",
-                    timestamp: null,
-                    role: "manager"
-                }
+                message = { text: "", timestamp: null };
             }
+    
+            // Determine role based on table name
+            switch (tableName) {
+                case 'manager_details':
+                    role = 'Manager';
+                    break;
+                case 'delivery_agent_details':
+                    role = 'Agent';
+                    break;
+                case 'outlet_details':
+                    role = 'Outlet';
+                    break;
+                default:
+                    role = 'Unknown';
+            }
+    
+            data = {
+                name: rowData.name,
+                id: rowData.id,
+                img: rowData.logo,
+                message,
+                role
+            };
         }
-
-        // if(deliveryAgentResult.rows.length > 0){
-        //     // console.log(deliveryAgentResult.rows)
-        // }
-        // if(outletResult.rows.length > 0){
-        //     // console.log(outletResult.rows)
-        // }
-        let chatData = managerData ? {
-            teamName: team.team_name,
-            teamCode: team.team_code,
-            teamData: [
-                {
-                    name: managerData.name,
-                    id: managerData.id,
-                    img: managerData.logo,
-                    ...message
-                }
-            ]
-        } : null
+        return data;
+    }
+    
+    let data = await Promise.all(teamResult.rows.map(async (team) => {
+        const managerData = await fetchDetails("manager_details", team.team_code, id);
+        const deliveryAgentData = await fetchDetails("delivery_agent_details", team.team_code, id);
+        const outletData = await fetchDetails("outlet_details", team.team_code, id);
+    
+        let chatData = null;
+        if (managerData || deliveryAgentData || outletData) {
+            chatData = {
+                teamName: team.team_name,
+                teamCode: team.team_code,
+                teamData: [managerData, deliveryAgentData, outletData].filter(Boolean) // Filter out null values
+            };
+        }
         return chatData;
-    }))
+    }));
 
-    // data.map((entry) => {
-    //     console.log("entry: ", entry.teamData)
-    // })
     res.status(200).json(data)
 })
 
