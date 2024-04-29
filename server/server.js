@@ -365,6 +365,33 @@ app.get("/currentUser", (req, res) => {
     res.status(200).json(req.user);
 })
 
+app.post("/getMessages", upload.none(), async (req, res) => {
+    const receivedData = req.body;
+
+    const senderResult = await db.query("SELECT (id, timestamp, text) FROM chat.messages WHERE conversation_id = $1", [receivedData.sender + "_" + receivedData.receiver]);
+    const receiverResult = await db.query("SELECT (id, timestamp, text) FROM chat.messages WHERE conversation_id = $1", [receivedData.receiver + "_" + receivedData.sender]);
+
+    const senderWithOwn = receiverResult.rows.map((message) => {
+        return {...message, own: true}
+    })
+    const receiverWithOwn = senderResult.rows.map((message) => {
+        return {...message, own: false}
+    })
+    
+    const mergedData = [...receiverWithOwn, ...senderWithOwn]
+    
+    const sortedData = mergedData.sort((a,b) => {
+        const timestampRegex = /"(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})"/;
+        const timestampA = new Date(a.row.match(timestampRegex)[1]); // Extract timestamp using regex
+        const timestampB = new Date(b.row.match(timestampRegex)[1]);
+        return timestampA - timestampB;
+    })
+
+    console.log("Receiver: ", receiverWithOwn, "Sender: ", senderWithOwn)
+    console.log("merged: ", mergedData ,"sorted: ", sortedData)
+    res.status(200).json(sortedData)
+})
+
 
 // --   passport => auth    --
 passport.use("local",
