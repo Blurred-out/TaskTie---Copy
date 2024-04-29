@@ -20,6 +20,7 @@
     "passport": "^0.7.0",
     "passport-local": "^1.0.0",
     "pg": "^8.11.5",
+    "socket.io": "^4.7.5",
     "uniqid": "^5.4.0"
   }
 }

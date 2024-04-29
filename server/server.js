@@ -8,14 +8,20 @@ import session from "express-session";
 import passport from "passport";
 import {Strategy} from "passport-local";
 import uniqid from "uniqid";
+import { Server } from "socket.io";
+import http from "http";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server)
 const port = 5000;
 const saltingRounds = 10;
 
+
+// --   pg setup    --
 const db = new pg.Client({
     user: "postgres",
     host: "localhost",
@@ -25,11 +31,15 @@ const db = new pg.Client({
 });
 db.connect();
 
+
+// --   xpress middleware   --
 app.use(express.json());
 app.use(express.urlencoded({extended: true}));
 // app.use(express.static("public"))
 app.use("/uploads", express.static("uploads"));
 
+
+// --   session setup   --
 app.use(session({
     secret: "IDONOTKNOW",
     resave: false,
@@ -41,6 +51,8 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
+
+// --   multer setup    --
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, path.join(__dirname, "uploads"));
@@ -51,9 +63,19 @@ const storage = multer.diskStorage({
         cb(null, fileName);
     }
 });
-
 const upload = multer({ storage: storage });
 
+
+// --   io setup    --
+io.on("connection", (socket) => {
+    console.log("connected to server, socket_id:",socket.id)
+    socket.on('user-message', (message) => {
+        console.log(message)
+    })
+})
+
+
+// --   register handlers   --
 app.post("/register/company/submit", upload.single('companyProfile'), (req, res) => {
     const {companyName: name, companyEmail: email, companyCode: code, password} = req.body;
     let fileName;
@@ -187,6 +209,8 @@ app.post("/register/outlet/submit", upload.single('outletProfile'), (req, res) =
     })
 })
 
+
+// --   fetching team/company name  --
 app.get("/getCompanyName", async(req, res) => {
     const companyCode = req.query.companyCode;
     // console.log("triggered");
@@ -222,6 +246,8 @@ app.get("/getTeamName", async(req, res) => {
     }
 })
 
+
+// --   login logout handlers   --
 app.post("/login", upload.none(), passport.authenticate("local"), (req, res) => {
     try{
         const { user, authInfo } = req;
@@ -256,6 +282,8 @@ app.post("/logout", (req, res) => {
     }
 })
 
+
+// --   others  --
 app.post("/chatListData", async (req, res) => {
     const {code, id} = req.body
     console.log("id", id);
@@ -337,6 +365,8 @@ app.get("/currentUser", (req, res) => {
     res.status(200).json(req.user);
 })
 
+
+// --   passport => auth    --
 passport.use("local",
     new Strategy(
         {usernameField: 'email', 
@@ -395,11 +425,13 @@ passport.deserializeUser((user,cb) => {
     cb(null, user);
 });
 
+
+// --   global error handler    --
 app.use((err, req, res, next) => {
-    console.log(err.stack);
+    console.log("from global error handler: ",err.stack);
     res.status(500).json({message: "Internal Server error"})
 })
 
-app.listen(port, () => {
+server.listen(port, () => {
     console.log(`server running on port ${port}`)
 });
