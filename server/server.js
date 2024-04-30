@@ -69,8 +69,12 @@ const upload = multer({ storage: storage });
 // --   io setup    --
 io.on("connection", (socket) => {
     console.log("connected to server, socket_id:",socket.id)
-    socket.on('user-message', (message) => {
+    socket.on("user-message", async(message) => {
         console.log(message)
+        await db.query("INSERT INTO chat.messages")
+    })
+    socket.on("user-image", (image_name) => {
+        console.log(image_name)
     })
 })
 
@@ -368,8 +372,8 @@ app.get("/currentUser", (req, res) => {
 app.post("/getMessages", upload.none(), async (req, res) => {
     const receivedData = req.body;
 
-    const senderResult = await db.query("SELECT (id, timestamp, text) FROM chat.messages WHERE conversation_id = $1", [receivedData.sender + "_" + receivedData.receiver]);
-    const receiverResult = await db.query("SELECT (id, timestamp, text) FROM chat.messages WHERE conversation_id = $1", [receivedData.receiver + "_" + receivedData.sender]);
+    const senderResult = await db.query("SELECT (id, timestamp, text, image_name) FROM chat.messages WHERE conversation_id = $1", [receivedData.sender + "_" + receivedData.receiver]);
+    const receiverResult = await db.query("SELECT (id, timestamp, text, image_name) FROM chat.messages WHERE conversation_id = $1", [receivedData.receiver + "_" + receivedData.sender]);
 
     const senderWithOwn = receiverResult.rows.map((message) => {
         return {...message, own: true}
