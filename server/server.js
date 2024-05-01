@@ -71,11 +71,14 @@ io.on("connection", (socket) => {
     console.log("connected to server, socket_id:",socket.id)
     socket.on("user-message", async(message) => {
         console.log(message)
-        await db.query("INSERT INTO chat.messages")
+        // await db.query("INSERT INTO chat.messages")
     })
     socket.on("user-image", (image_name) => {
         console.log(image_name)
     })
+    socket.on("join-chat", (id => {
+        console.log(id)
+    }))
 })
 
 
@@ -101,7 +104,7 @@ app.post("/register/company/submit", upload.single('companyProfile'), (req, res)
             if(checkCompany.rows.length > 0){
                 res.status(400).json({message: "Email already registered. PLease try logging in."})
             }else{
-            db.query("INSERT INTO company_details(id, name, email, code, image_name, password) VALUES($1, $2, $3, $4, $5, $6)", [uniqid(), name, email, code, fileName, hash])
+            db.query("INSERT INTO company_details(id, name, email, code, image_name, password, role) VALUES($1, $2, $3, $4, $5, $6, $7)", [uniqid(), name, email, code, fileName, hash, "company"])
             res.sendStatus(200)
             }
         }catch(err){
@@ -133,8 +136,8 @@ app.post("/register/manager/submit", upload.single('managerProfile'), (req, res)
                 res.status(400).json({message: "Email already registered. Please try logging in."})
             }else{
                 db.query(
-                    "INSERT INTO manager_details(id, name, email, team_code, company_code, logo, password, phone_no) VALUES($1, $2, $3, $4, $5, $6, $7, $8)",
-                    [uniqid(), name, email, teamCode, companyCode, fileName, hash, phoneNo]
+                    "INSERT INTO manager_details(id, name, email, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    [uniqid(), name, email, teamCode, companyCode, fileName, hash, phoneNo, "manager"]
                 )
                 res.sendStatus(200)
             }
@@ -167,8 +170,8 @@ app.post("/register/deliveryAgent/submit", upload.single('deliveryAgentProfile')
                 res.status(400).json({message: "Email already registered. Please try logging in."})
             }else{
                 db.query(
-                    "INSERT INTO delivery_agent_details(id, name, email, team_code, company_code, logo, password, phone_no) VALUES($1, $2, $3, $4, $5, $6, $7, $8)",
-                    [uniqid(), name, email, teamCode, companyCode, fileName, hash, phoneNo]
+                    "INSERT INTO delivery_agent_details(id, name, email, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    [uniqid(), name, email, teamCode, companyCode, fileName, hash, phoneNo, "delivery_agent"]
                 )
                 res.sendStatus(200)
             }
@@ -201,8 +204,8 @@ app.post("/register/outlet/submit", upload.single('outletProfile'), (req, res) =
                 res.status(400).json({message: "Email already registered. Please try logging in."})
             }else{
                 db.query(
-                    "INSERT INTO outlet_details(id, name, email, address, team_code, company_code, logo, password, phone_no) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-                    [uniqid(), name, email, address, teamCode, companyCode, fileName, hash, phoneNo]
+                    "INSERT INTO outlet_details(id, name, email, address, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    [uniqid(), name, email, address, teamCode, companyCode, fileName, hash, phoneNo, "outlet"]
                 )
                 res.sendStatus(200)
             }
@@ -251,7 +254,7 @@ app.get("/getTeamName", async(req, res) => {
 })
 
 
-// --   login logout handlers   --
+// --   login/logout handlers   --
 app.post("/login", upload.none(), passport.authenticate("local"), (req, res) => {
     try{
         const { user, authInfo } = req;
@@ -289,10 +292,13 @@ app.post("/logout", (req, res) => {
 
 // --   others  --
 app.post("/chatListData", async (req, res) => {
-    const {code, id} = req.body
-    console.log("id", id);
+    const {id, role, company_code: code = req.body.code,} = req.body //code is company code, id is the the currently logged-in user id.. role is the user type
+    // console.log("id: ", id, "role: ", role, "code: ", code);
+
+    //fectching teams
     const teamResult = await db.query("SELECT * FROM team_details WHERE company_code = $1", [code])
 
+    //fetches details from a particular table (manager/agent/outlet_details)
     async function fetchDetails(tableName, teamCode, id) {
         const result = await db.query(`SELECT * FROM ${tableName} WHERE team_code = $1`, [teamCode]);
         let data = null;
@@ -302,15 +308,24 @@ app.post("/chatListData", async (req, res) => {
             const rowData = result.rows[0];
             // returns the latest message of a user
             const messageData = await db.query(`
-                SELECT m.*
-                FROM chat.messages m
-                INNER JOIN (
-                    SELECT conversation_id, MAX(timestamp) AS max_timestamp
-                    FROM chat.messages
-                    GROUP BY conversation_id
-                ) latest ON m.conversation_id = latest.conversation_id AND m.timestamp = latest.max_timestamp
-                WHERE m.conversation_id = $1;
-            `, [id + "_" + rowData.id]);
+            WITH latest_messages AS (
+                (SELECT *
+                FROM chat.messages
+                WHERE conversation_id = $1
+                ORDER BY timestamp DESC
+                LIMIT 1)
+                UNION ALL
+                (SELECT *
+                FROM chat.messages
+                WHERE conversation_id = $2
+                ORDER BY timestamp DESC
+                LIMIT 1)
+            )
+            SELECT *
+            FROM latest_messages
+            ORDER BY timestamp DESC
+            LIMIT 1;
+            `, [id + "_" + rowData.id, rowData.id + "_" + id]);
     
             if (messageData.rows.length > 0) {
                 const { text, timestamp } = messageData.rows[0];
@@ -330,6 +345,9 @@ app.post("/chatListData", async (req, res) => {
                 case 'outlet_details':
                     role = 'Outlet';
                     break;
+                case 'company':
+                    role = 'company';
+                    break;
                 default:
                     role = 'Unknown';
             }
@@ -344,23 +362,89 @@ app.post("/chatListData", async (req, res) => {
         }
         return data;
     }
+    //fetches deetails from company_details
+    async function fetchCompanyDetails(){
+        const result = await db.query("SELECT * FROM company_details WHERE code = $1", [code])
+        console.log(result.rows)
+        let data = null;
+        let message = null;
+        if(result.rows.length > 0){
+            const rowData = result.rows[0];
+            const messageData = await db.query(`
+            WITH latest_messages AS (
+                (SELECT *
+                FROM chat.messages
+                WHERE conversation_id = $1
+                ORDER BY timestamp DESC
+                LIMIT 1)
+                UNION ALL
+                (SELECT *
+                FROM chat.messages
+                WHERE conversation_id = $2
+                ORDER BY timestamp DESC
+                LIMIT 1)
+            )
+            SELECT *
+            FROM latest_messages
+            ORDER BY timestamp DESC
+            LIMIT 1;
+            `, [id + "_" + rowData.id, rowData.id + "_" + id]);
     
-    let data = await Promise.all(teamResult.rows.map(async (team) => {
-        //fetches all 3 types of user details
-        const managerData = await fetchDetails("manager_details", team.team_code, id);
-        const deliveryAgentData = await fetchDetails("delivery_agent_details", team.team_code, id);
-        const outletData = await fetchDetails("outlet_details", team.team_code, id);
-    
-        let chatData = null;
-        if (managerData || deliveryAgentData || outletData) {
-            chatData = {
-                teamName: team.team_name,
-                teamCode: team.team_code,
-                teamData: [managerData, deliveryAgentData, outletData].filter(Boolean) // Filter out null values
+            if (messageData.rows.length > 0) {
+                const { text, timestamp } = messageData.rows[0];
+                message = { text, timestamp };
+            } else {
+                message = { text: "", timestamp: null };
+            }
+
+            data = {
+                name: rowData.name,
+                id: rowData.id,
+                img: rowData.logo,
+                message,
+                role: "company",
             };
         }
-        return chatData;
-    })); 
+        return data;
+    }
+    
+    let data;
+    if (role === 'company') {
+        data = await Promise.all(teamResult.rows.map(async (team) => {
+            //fetches all 3 types of user details
+            const managerData = await fetchDetails("manager_details", team.team_code, id);
+            const deliveryAgentData = await fetchDetails("delivery_agent_details", team.team_code, id);
+            const outletData = await fetchDetails("outlet_details", team.team_code, id);
+        
+            let chatData = null;
+            if (managerData || deliveryAgentData || outletData) {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: [managerData, deliveryAgentData, outletData].filter(Boolean) // Filter out null values
+                };
+            }
+            return chatData;
+        }));
+    } else if (role === 'manager') {
+        data = await Promise.all(teamResult.rows.map(async (team) => {
+            const deliveryAgentData = await fetchDetails("delivery_agent_details", team.team_code, id);
+            const outletData = await fetchDetails("outlet_details", team.team_code, id);
+
+            let chatData = null;
+            if(deliveryAgentData || outletData){
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: [deliveryAgentData, outletData].filter(Boolean) //Filter out null values
+                };
+            }
+            return chatData;
+        }));
+        let companyData = await fetchCompanyDetails();
+        data = [[...data], companyData]
+        console.log("\n\nfinal data: ",data)
+    }
 
     res.status(200).json(data)
 })
@@ -371,6 +455,7 @@ app.get("/currentUser", (req, res) => {
 
 app.post("/getMessages", upload.none(), async (req, res) => {
     const receivedData = req.body;
+    // console.log(receivedData)
 
     const senderResult = await db.query("SELECT (id, timestamp, text, image_name) FROM chat.messages WHERE conversation_id = $1", [receivedData.sender + "_" + receivedData.receiver]);
     const receiverResult = await db.query("SELECT (id, timestamp, text, image_name) FROM chat.messages WHERE conversation_id = $1", [receivedData.receiver + "_" + receivedData.sender]);
