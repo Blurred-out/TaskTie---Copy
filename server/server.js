@@ -66,19 +66,29 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 
-// --   io setup    --
+// --  socket io setup    --
 io.on("connection", (socket) => {
-    console.log("connected to server, socket_id:",socket.id)
+    // console.log("connected to server, socket_id:",socket.id)
+    socket.on("join-room", roomId => {
+        socket.roomId = roomId;
+        socket.join(roomId);
+        const room = io.sockets.adapter.rooms.get(socket.roomId)    //use this to check the number of sockets ina  room
+        console.log(room.size)
+    })
     socket.on("user-message", async(message) => {
         console.log(message)
-        // await db.query("INSERT INTO chat.messages")
+        await db.query(
+            `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, text, timestamp)
+            VALUES($1, $2, $3, $4, $5)`,
+            [message.convoId, message.senderId, message.receiverId, message.text, message.timestamp]
+        )
+
+        io.to(socket.roomId).emit("message-received", message.timestamp, message.text, message.senderId)
+        console.log("event emitted")
     })
     socket.on("user-image", (image_name) => {
         console.log(image_name)
     })
-    socket.on("join-chat", (id => {
-        console.log(id)
-    }))
 })
 
 
@@ -104,7 +114,9 @@ app.post("/register/company/submit", upload.single('companyProfile'), (req, res)
             if(checkCompany.rows.length > 0){
                 res.status(400).json({message: "Email already registered. PLease try logging in."})
             }else{
-            db.query("INSERT INTO company_details(id, name, email, code, image_name, password, role) VALUES($1, $2, $3, $4, $5, $6, $7)", [uniqid(), name, email, code, fileName, hash, "company"])
+                const id = uniqid();
+            db.query("INSERT INTO company_details(id, name, email, code, image_name, password, role) VALUES($1, $2, $3, $4, $5, $6, $7)", [id, name, email, code, fileName, hash, "company"])
+            db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
             res.sendStatus(200)
             }
         }catch(err){
@@ -135,10 +147,12 @@ app.post("/register/manager/submit", upload.single('managerProfile'), (req, res)
             if(checkManager.rows.length > 0){
                 res.status(400).json({message: "Email already registered. Please try logging in."})
             }else{
+                const id = uniqid();
                 db.query(
                     "INSERT INTO manager_details(id, name, email, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-                    [uniqid(), name, email, teamCode, companyCode, fileName, hash, phoneNo, "manager"]
+                    [id, name, email, teamCode, companyCode, fileName, hash, phoneNo, "manager"]
                 )
+                db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
                 res.sendStatus(200)
             }
         } catch (err) {
@@ -169,10 +183,12 @@ app.post("/register/deliveryAgent/submit", upload.single('deliveryAgentProfile')
             if(checkDeliveryAgent.rows.length > 0){
                 res.status(400).json({message: "Email already registered. Please try logging in."})
             }else{
+                const id = uniqid();
                 db.query(
                     "INSERT INTO delivery_agent_details(id, name, email, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-                    [uniqid(), name, email, teamCode, companyCode, fileName, hash, phoneNo, "delivery_agent"]
+                    [id, name, email, teamCode, companyCode, fileName, hash, phoneNo, "delivery_agent"]
                 )
+                db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
                 res.sendStatus(200)
             }
         } catch (err) {
@@ -203,10 +219,12 @@ app.post("/register/outlet/submit", upload.single('outletProfile'), (req, res) =
             if(checkOutlet.rows.length > 0){
                 res.status(400).json({message: "Email already registered. Please try logging in."})
             }else{
+                const id = uniqid();
                 db.query(
                     "INSERT INTO outlet_details(id, name, email, address, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-                    [uniqid(), name, email, address, teamCode, companyCode, fileName, hash, phoneNo, "outlet"]
+                    [id, name, email, address, teamCode, companyCode, fileName, hash, phoneNo, "outlet"]
                 )
+                db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
                 res.sendStatus(200)
             }
         } catch (err) {
@@ -460,10 +478,10 @@ app.post("/getMessages", upload.none(), async (req, res) => {
     const senderResult = await db.query("SELECT (id, timestamp, text, image_name) FROM chat.messages WHERE conversation_id = $1", [receivedData.sender + "_" + receivedData.receiver]);
     const receiverResult = await db.query("SELECT (id, timestamp, text, image_name) FROM chat.messages WHERE conversation_id = $1", [receivedData.receiver + "_" + receivedData.sender]);
 
-    const senderWithOwn = receiverResult.rows.map((message) => {
+    const senderWithOwn = senderResult.rows.map((message) => {
         return {...message, own: true}
     })
-    const receiverWithOwn = senderResult.rows.map((message) => {
+    const receiverWithOwn = receiverResult.rows.map((message) => {
         return {...message, own: false}
     })
     
