@@ -59,16 +59,20 @@ const storage = multer.diskStorage({
     },
     filename: function (req, file, cb) {
         const ext = path.extname(file.originalname)
-        const fileName = `logo_${new Date().getTime()}${ext}`;
+        const fileName = `img_${new Date().getTime()}${ext}`;
         cb(null, fileName);
     }
 });
 const upload = multer({ storage: storage });
 
 
+let socketInstance;
+let ioInstance;
 // --  socket io setup    --
 io.on("connection", (socket) => {
     // console.log("connected to server, socket_id:",socket.id)
+    socketInstance = socket;
+    ioInstance = io;
     socket.on("join-room", roomId => {
         socket.roomId = roomId;
         socket.join(roomId);
@@ -82,14 +86,16 @@ io.on("connection", (socket) => {
             VALUES($1, $2, $3, $4, $5)`,
             [message.convoId, message.senderId, message.receiverId, message.text, message.timestamp]
         )
-
         io.to(socket.roomId).emit("message-received", message.timestamp, message.text, message.senderId)
         console.log("event emitted")
     })
-    socket.on("user-image", (image_name) => {
-        console.log(image_name)
-    })
 })
+
+// --   socket fxns    --
+function emitImageReceived(socket, fileName, timestamp, senderId){
+    ioInstance.to(socket.roomId).emit("image-received", fileName, timestamp, senderId);
+    console.log("event emitted with socket id: ", socket.id)
+}
 
 
 // --   register handlers   --
@@ -497,6 +503,22 @@ app.post("/getMessages", upload.none(), async (req, res) => {
     console.log("Receiver: ", receiverWithOwn, "Sender: ", senderWithOwn)
     console.log("merged: ", mergedData ,"sorted: ", sortedData)
     res.status(200).json(sortedData)
+})
+
+app.post("/sendChatImage", upload.single('image'), async(req, res) => {
+    console.log(req.file.filename)
+    let fileName = req.file.filename;
+    let {convoId, senderId, receiverId, timestamp} = req.body;
+
+    await db.query(
+        `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, image_name, timestamp)
+        VALUES($1, $2, $3, $4, $5)`,
+        [convoId, senderId, receiverId, fileName, timestamp]
+    )
+
+    emitImageReceived(socketInstance, fileName, timestamp, senderId)
+    console.log("event emitted")
+    res.sendStatus(200)
 })
 
 
