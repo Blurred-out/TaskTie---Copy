@@ -155,7 +155,7 @@ app.post("/register/manager/submit", upload.single('managerProfile'), (req, res)
             }else{
                 const id = uniqid();
                 db.query(
-                    "INSERT INTO manager_details(id, name, email, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    "INSERT INTO manager_details(id, name, email, team_code, company_code, image_name, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                     [id, name, email, teamCode, companyCode, fileName, hash, phoneNo, "manager"]
                 )
                 db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
@@ -191,7 +191,7 @@ app.post("/register/deliveryAgent/submit", upload.single('deliveryAgentProfile')
             }else{
                 const id = uniqid();
                 db.query(
-                    "INSERT INTO delivery_agent_details(id, name, email, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    "INSERT INTO delivery_agent_details(id, name, email, team_code, company_code, image_name, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                     [id, name, email, teamCode, companyCode, fileName, hash, phoneNo, "delivery_agent"]
                 )
                 db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
@@ -227,7 +227,7 @@ app.post("/register/outlet/submit", upload.single('outletProfile'), (req, res) =
             }else{
                 const id = uniqid();
                 db.query(
-                    "INSERT INTO outlet_details(id, name, email, address, team_code, company_code, logo, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    "INSERT INTO outlet_details(id, name, email, address, team_code, company_code, image_name, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                     [id, name, email, address, teamCode, companyCode, fileName, hash, phoneNo, "outlet"]
                 )
                 db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
@@ -316,11 +316,18 @@ app.post("/logout", (req, res) => {
 
 // --   others  --
 app.post("/chatListData", async (req, res) => {
-    const {id, role, company_code: code = req.body.code,} = req.body //code is company code, id is the the currently logged-in user id.. role is the user type
-    // console.log("id: ", id, "role: ", role, "code: ", code);
+    const {id, role, company_code: code = req.body.code, email} = req.body //code is company code, id is the the currently logged-in user id.. role is the user type
+    console.log("id: ", id, "role: ", role, "code: ", code);
 
     //fectching teams
-    const teamResult = await db.query("SELECT * FROM team_details WHERE company_code = $1", [code])
+    let teamResult;
+    if(role === "manager"){
+        teamResult = await db.query("SELECT * FROM team_details WHERE company_code = $1 AND manager_email = $2", [code, email])
+    } else {
+        teamResult = await db.query("SELECT * FROM team_details WHERE company_code = $1", [code])
+    }
+
+    // console.log(teamResult.rows)
 
     //fetches details from a particular table (manager/agent/outlet_details)
     async function fetchDetails(tableName, teamCode, id) {
@@ -379,7 +386,7 @@ app.post("/chatListData", async (req, res) => {
             data = {
                 name: rowData.name,
                 id: rowData.id,
-                img: rowData.logo,
+                image_name: rowData.image_name,
                 message,
                 role
             };
@@ -424,7 +431,7 @@ app.post("/chatListData", async (req, res) => {
             data = {
                 name: rowData.name,
                 id: rowData.id,
-                img: rowData.logo,
+                image_name: rowData.image_name,
                 message,
                 role: "company",
             };
@@ -447,7 +454,14 @@ app.post("/chatListData", async (req, res) => {
                     teamCode: team.team_code,
                     teamData: [managerData, deliveryAgentData, outletData].filter(Boolean) // Filter out null values
                 };
+            } else {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: null
+                };
             }
+            
             return chatData;
         }));
     } else if (role === 'manager') {
@@ -462,7 +476,14 @@ app.post("/chatListData", async (req, res) => {
                     teamCode: team.team_code,
                     teamData: [deliveryAgentData, outletData].filter(Boolean) //Filter out null values
                 };
+            } else {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: null
+                };
             }
+            
             return chatData;
         }));
         let companyData = await fetchCompanyDetails();
