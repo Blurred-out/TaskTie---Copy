@@ -86,15 +86,23 @@ io.on("connection", (socket) => {
             VALUES($1, $2, $3, $4, $5)`,
             [message.convoId, message.senderId, message.receiverId, message.text, message.timestamp]
         )
-        io.to(socket.roomId).emit("message-received", message.timestamp, message.text, message.senderId, message.receiverId)
+
+        const time = new Date(message.timestamp);
+        const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+        console.log(formattedTime)
+        io.to(socket.roomId).emit("message-received", formattedTime, message.text, message.senderId, message.receiverId)
         console.log("event emitted")
     })
 })
 
 // --   socket fxns    --
 function emitImageReceived(socket, fileName, timestamp, senderId, receiverId){
-    ioInstance.to(socket.roomId).emit("image-received", fileName, timestamp, senderId, receiverId);
-    console.log("event emitted to room id: ", socket.id)
+    const time = new Date(timestamp);
+    const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+
+    ioInstance.to(socket.roomId).emit("image-received", fileName, formattedTime, senderId, receiverId);
+    console.log(formattedTime)
+    console.log("event emitted with socket id: ", socket.id)
 }
 
 
@@ -360,7 +368,9 @@ app.post("/chatListData", async (req, res) => {
     
             if (messageData.rows.length > 0) {
                 const { text, timestamp } = messageData.rows[0];
-                message = { text, timestamp };
+                const time = new Date(timestamp);
+                const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+                message = { text, timestamp: formattedTime };
             } else {
                 message = { text: "", timestamp: null };
             }
@@ -376,8 +386,8 @@ app.post("/chatListData", async (req, res) => {
                 case 'outlet_details':
                     role = 'Outlet';
                     break;
-                case 'company':
-                    role = 'company';
+                case 'company_details':
+                    role = 'Company';
                     break;
                 default:
                     role = 'Unknown';
@@ -423,7 +433,9 @@ app.post("/chatListData", async (req, res) => {
     
             if (messageData.rows.length > 0) {
                 const { text, timestamp } = messageData.rows[0];
-                message = { text, timestamp };
+                const time = new Date(timestamp);
+                const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+                message = { text, timestamp: formattedTime };
             } else {
                 message = { text: "", timestamp: null };
             }
@@ -433,7 +445,7 @@ app.post("/chatListData", async (req, res) => {
                 id: rowData.id,
                 image_name: rowData.image_name,
                 message,
-                role: "company",
+                role: "Company",
             };
         }
         return data;
@@ -461,16 +473,17 @@ app.post("/chatListData", async (req, res) => {
                     teamData: null
                 };
             }
-            
             return chatData;
         }));
     } else if (role === 'manager') {
+        const companyData = await fetchCompanyDetails();
+
         data = await Promise.all(teamResult.rows.map(async (team) => {
             const deliveryAgentData = await fetchDetails("delivery_agent_details", team.team_code, id);
             const outletData = await fetchDetails("outlet_details", team.team_code, id);
-
+            
             let chatData = null;
-            if(deliveryAgentData || outletData){
+            if(deliveryAgentData || outletData || companyData){
                 chatData = {
                     teamName: team.team_name,
                     teamCode: team.team_code,
@@ -486,11 +499,10 @@ app.post("/chatListData", async (req, res) => {
             
             return chatData;
         }));
-        let companyData = await fetchCompanyDetails();
-        data = [[...data], companyData]
-        console.log("\n\nfinal data: ",data)
+        // let companyData = await fetchCompanyDetails();
+        data = [...data, companyData]
     }
-
+    console.log("\n\nfinal data: ",data)
     res.status(200).json(data)
 })
 
