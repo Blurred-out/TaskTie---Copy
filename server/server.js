@@ -86,15 +86,15 @@ io.on("connection", (socket) => {
             VALUES($1, $2, $3, $4, $5)`,
             [message.convoId, message.senderId, message.receiverId, message.text, message.timestamp]
         )
-        io.to(socket.roomId).emit("message-received", message.timestamp, message.text, message.senderId)
+        io.to(socket.roomId).emit("message-received", message.timestamp, message.text, message.senderId, message.receiverId)
         console.log("event emitted")
     })
 })
 
 // --   socket fxns    --
-function emitImageReceived(socket, fileName, timestamp, senderId){
-    ioInstance.to(socket.roomId).emit("image-received", fileName, timestamp, senderId);
-    console.log("event emitted with socket id: ", socket.id)
+function emitImageReceived(socket, fileName, timestamp, senderId, receiverId){
+    ioInstance.to(socket.roomId).emit("image-received", fileName, timestamp, senderId, receiverId);
+    console.log("event emitted to room id: ", socket.id)
 }
 
 
@@ -537,7 +537,7 @@ app.post("/sendChatImage", upload.single('image'), async(req, res) => {
         [convoId, senderId, receiverId, fileName, timestamp]
     )
 
-    emitImageReceived(socketInstance, fileName, timestamp, senderId)
+    emitImageReceived(socketInstance, fileName, timestamp, senderId, receiverId)
     console.log("event emitted")
     res.sendStatus(200)
 })
