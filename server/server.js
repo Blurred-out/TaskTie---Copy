@@ -78,29 +78,45 @@ io.on("connection", (socket) => {
         socket.join(roomId);
         const room = io.sockets.adapter.rooms.get(socket.roomId)    //use this to check the number of sockets ina  room
         console.log(room.size)
+
+        io.to(socket.roomId).emit("room-size", room.size)
+
+        socket.on("update-read-receipt", async(senderId, receiverId) => {
+            // receiverId_senderId
+            console.log(senderId, receiverId);
+            await db.query(`UPDATE chat.messages SET read_receipt = 'true' WHERE conversation_id = $1`, [receiverId + '_' + senderId])
+            io.to(socket.roomId).emit("updated-read-receipt",receiverId)
+            console.log('read receipt event emitted!, room id: ', socket.roomId)
+        })
     })
+
+    //for realtime updates on active users in a chatroom
+    socket.on("disconnect", () => {
+        // console.log(socket.roomId);
+        io.to(socket.roomId).emit("room-size", 1)
+    })
+    
     socket.on("user-message", async(message) => {
         console.log(message)
         await db.query(
-            `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, text, timestamp)
-            VALUES($1, $2, $3, $4, $5)`,
-            [message.convoId, message.senderId, message.receiverId, message.text, message.timestamp]
+            `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, text, timestamp, read_receipt)
+            VALUES($1, $2, $3, $4, $5, $6)`,
+            [message.convoId, message.senderId, message.receiverId, message.text, message.timestamp, message.readReceipt]
         )
-
         const time = new Date(message.timestamp);
         const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
         console.log(formattedTime)
-        io.to(socket.roomId).emit("message-received", formattedTime, message.text, message.senderId, message.receiverId)
+        io.to(socket.roomId).emit("message-received", formattedTime, message.text, message.senderId, message.receiverId, message.readReceipt)
         console.log("event emitted")
     })
 })
 
 // --   socket fxns    --
-function emitImageReceived(socket, fileName, timestamp, senderId, receiverId){
+function emitImageReceived(socket, fileName, timestamp, senderId, receiverId, readReceipt){
     const time = new Date(timestamp);
     const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
 
-    ioInstance.to(socket.roomId).emit("image-received", fileName, formattedTime, senderId, receiverId);
+    ioInstance.to(socket.roomId).emit("image-received", fileName, formattedTime, senderId, receiverId, readReceipt);
     console.log(formattedTime)
     console.log("event emitted with socket id: ", socket.id)
 }
@@ -514,8 +530,8 @@ app.post("/getMessages", upload.none(), async (req, res) => {
     const receivedData = req.body;
     // console.log(receivedData)
 
-    const senderResult = await db.query("SELECT (id, timestamp, text, image_name) FROM chat.messages WHERE conversation_id = $1", [receivedData.sender + "_" + receivedData.receiver]);
-    const receiverResult = await db.query("SELECT (id, timestamp, text, image_name) FROM chat.messages WHERE conversation_id = $1", [receivedData.receiver + "_" + receivedData.sender]);
+    const senderResult = await db.query("SELECT (id, timestamp, text, image_name, read_receipt) FROM chat.messages WHERE conversation_id = $1", [receivedData.sender + "_" + receivedData.receiver]);
+    const receiverResult = await db.query("SELECT (id, timestamp, text, image_name, read_receipt) FROM chat.messages WHERE conversation_id = $1", [receivedData.receiver + "_" + receivedData.sender]);
 
     const senderWithOwn = senderResult.rows.map((message) => {
         return {...message, own: true}
@@ -540,16 +556,17 @@ app.post("/getMessages", upload.none(), async (req, res) => {
 
 app.post("/sendChatImage", upload.single('image'), async(req, res) => {
     console.log(req.file.filename)
+    console.log(req.body)
     let fileName = req.file.filename;
-    let {convoId, senderId, receiverId, timestamp} = req.body;
+    let {convoId, senderId, receiverId, timestamp, readReceipt} = req.body;
 
     await db.query(
-        `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, image_name, timestamp)
-        VALUES($1, $2, $3, $4, $5)`,
-        [convoId, senderId, receiverId, fileName, timestamp]
+        `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, image_name, timestamp, read_receipt)
+        VALUES($1, $2, $3, $4, $5, $6)`,
+        [convoId, senderId, receiverId, fileName, timestamp, false]
     )
 
-    emitImageReceived(socketInstance, fileName, timestamp, senderId, receiverId)
+    emitImageReceived(socketInstance, fileName, timestamp, senderId, receiverId, readReceipt)
     console.log("event emitted")
     res.sendStatus(200)
 })
