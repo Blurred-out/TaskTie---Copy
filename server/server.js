@@ -10,6 +10,7 @@ import {Strategy} from "passport-local";
 import uniqid from "uniqid";
 import { Server } from "socket.io";
 import http from "http";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,6 +69,7 @@ const upload = multer({ storage: storage });
 
 let socketInstance;
 let ioInstance;
+let room;
 // --  socket io setup    --
 io.on("connection", (socket) => {
     // console.log("connected to server, socket_id:",socket.id)
@@ -76,7 +78,7 @@ io.on("connection", (socket) => {
     socket.on("join-room", roomId => {
         socket.roomId = roomId;
         socket.join(roomId);
-        const room = io.sockets.adapter.rooms.get(socket.roomId)    //use this to check the number of sockets ina  room
+        room = io.sockets.adapter.rooms.get(socket.roomId)    //use this to check the number of sockets ina  room
         console.log(room.size)
 
         io.to(socket.roomId).emit("room-size", room.size)
@@ -85,7 +87,7 @@ io.on("connection", (socket) => {
             // receiverId_senderId
             console.log(senderId, receiverId);
             await db.query(`UPDATE chat.messages SET read_receipt = 'true' WHERE conversation_id = $1`, [receiverId + '_' + senderId])
-            io.to(socket.roomId).emit("updated-read-receipt",receiverId)
+            io.to(socket.roomId).emit("updated-read-receipt", receiverId, senderId)
             console.log('read receipt event emitted!, room id: ', socket.roomId)
         })
     })
@@ -96,7 +98,7 @@ io.on("connection", (socket) => {
         io.to(socket.roomId).emit("room-size", 1)
     })
     
-    socket.on("user-message", async(message) => {
+    socket.on("text-message", async(message) => {
         console.log(message)
         await db.query(
             `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, text, timestamp, read_receipt)
@@ -109,18 +111,41 @@ io.on("connection", (socket) => {
         io.to(socket.roomId).emit("message-received", formattedTime, message.text, message.senderId, message.receiverId, message.readReceipt)
         console.log("event emitted")
     })
+
+    socket.on("image-message", async(data) => {
+        
+        const { image, convoId, senderId, receiverId, timestamp, readReceipt } = data;
+        console.log("imageData: ",image, convoId)
+
+        try {
+            const buffer = Buffer.from(image, 'base64');
+            const fileName = `img_${new Date().getTime()}.png`;
+            fs.writeFileSync(`uploads/${fileName}`, buffer);
+
+            // Insert into database
+            await db.query(
+                `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, image_name, timestamp, read_receipt)
+                VALUES($1, $2, $3, $4, $5, $6)`,
+                [convoId, senderId, receiverId, fileName, timestamp, false]
+            );
+
+            // Emit event to inform clients about the new image
+            // emitImageReceived(socketInstance, file.filename, timestamp, senderId, receiverId, readReceipt);
+
+            const time = new Date(timestamp);
+            const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+
+            ioInstance.to(socket.roomId).emit("image-received", fileName, formattedTime, senderId, receiverId, readReceipt);
+            console.log(formattedTime)
+            console.log("event emitted with socket id: ", socket.id)
+
+        } catch (err) {
+            console.error("Error handling image upload:", err);
+        }
+    })
 })
 
 // --   socket fxns    --
-function emitImageReceived(socket, fileName, timestamp, senderId, receiverId, readReceipt){
-    const time = new Date(timestamp);
-    const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-
-    ioInstance.to(socket.roomId).emit("image-received", fileName, formattedTime, senderId, receiverId, readReceipt);
-    console.log(formattedTime)
-    console.log("event emitted with socket id: ", socket.id)
-}
-
 
 // --   register handlers   --
 app.post("/register/company/submit", upload.single('companyProfile'), (req, res) => {
@@ -383,12 +408,12 @@ app.post("/chatListData", async (req, res) => {
             `, [id + "_" + rowData.id, rowData.id + "_" + id]);
     
             if (messageData.rows.length > 0) {
-                const { text, timestamp } = messageData.rows[0];
+                const { text, timestamp, read_receipt, sender_id } = messageData.rows[0];
                 const time = new Date(timestamp);
                 const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-                message = { text, timestamp: formattedTime };
+                message = { text, timestamp: formattedTime, readReceipt: read_receipt, senderId: sender_id };
             } else {
-                message = { text: "", timestamp: null };
+                message = { text: "", timestamp: null, readReceipt: "false", senderId: "" };
             }
     
             // Determine role based on table name
@@ -448,12 +473,12 @@ app.post("/chatListData", async (req, res) => {
             `, [id + "_" + rowData.id, rowData.id + "_" + id]);
     
             if (messageData.rows.length > 0) {
-                const { text, timestamp } = messageData.rows[0];
+                const { text, timestamp, read_receipt, sender_id } = messageData.rows[0];
                 const time = new Date(timestamp);
                 const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-                message = { text, timestamp: formattedTime };
+                message = { text, timestamp: formattedTime, readReceipt: read_receipt, senderId: sender_id };
             } else {
-                message = { text: "", timestamp: null };
+                message = { text: "", timestamp: null, readReceipt: "false", senderId: "" };
             }
 
             data = {
@@ -554,22 +579,22 @@ app.post("/getMessages", upload.none(), async (req, res) => {
     res.status(200).json(sortedData)
 })
 
-app.post("/sendChatImage", upload.single('image'), async(req, res) => {
-    console.log(req.file.filename)
-    console.log(req.body)
-    let fileName = req.file.filename;
-    let {convoId, senderId, receiverId, timestamp, readReceipt} = req.body;
+// app.post("/sendChatImage", upload.single('image'), async(req, res) => {
+//     console.log(req.file.filename)
+//     console.log(req.body)
+//     let fileName = req.file.filename;
+//     let {convoId, senderId, receiverId, timestamp, readReceipt} = req.body;
 
-    await db.query(
-        `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, image_name, timestamp, read_receipt)
-        VALUES($1, $2, $3, $4, $5, $6)`,
-        [convoId, senderId, receiverId, fileName, timestamp, false]
-    )
+//     await db.query(
+//         `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, image_name, timestamp, read_receipt)
+//         VALUES($1, $2, $3, $4, $5, $6)`,
+//         [convoId, senderId, receiverId, fileName, timestamp, false]
+//     )
 
-    emitImageReceived(socketInstance, fileName, timestamp, senderId, receiverId, readReceipt)
-    console.log("event emitted")
-    res.sendStatus(200)
-})
+//     emitImageReceived(socketInstance, fileName, timestamp, senderId, receiverId, readReceipt)
+//     console.log("event emitted")
+//     res.sendStatus(200)
+// })
 
 
 // --   passport => auth    --
