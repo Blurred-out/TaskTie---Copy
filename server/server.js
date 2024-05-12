@@ -11,13 +11,23 @@ import uniqid from "uniqid";
 import { Server } from "socket.io";
 import http from "http";
 import fs from "fs";
+import { instrument } from "@socket.io/admin-ui"
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server)
+const io = new Server(server, {
+    cors: {
+        origin: ["https://admin.socket.io"],
+        credentials: true
+    }
+})
+instrument(io, {
+    auth: false,
+    mode: "development"
+})
 const port = 5000;
 const saltingRounds = 10;
 
@@ -67,14 +77,10 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 
-let socketInstance;
-let ioInstance;
 let room;
 // --  socket io setup    --
 io.on("connection", (socket) => {
     // console.log("connected to server, socket_id:",socket.id)
-    socketInstance = socket;
-    ioInstance = io;
     socket.on("join-room", roomId => {
         socket.roomId = roomId;
         socket.join(roomId);
@@ -88,15 +94,27 @@ io.on("connection", (socket) => {
             console.log(senderId, receiverId);
             await db.query(`UPDATE chat.messages SET read_receipt = 'true' WHERE conversation_id = $1`, [receiverId + '_' + senderId])
             io.to(socket.roomId).emit("updated-read-receipt", receiverId, senderId)
+            io.to(receiverId).emit("updated-read-receipt", receiverId, senderId)
             console.log('read receipt event emitted!, room id: ', socket.roomId)
         })
     })
 
+    socket.on("leave-room", roomName => {
+        console.log("leaving room: ",roomName)
+        socket.leave(roomName)
+        room = io.sockets.adapter.rooms.get(roomName);
+        if (room) {
+            console.log(room.size);
+            io.to(roomName).emit("room-size", room.size);
+        }
+    })
+
     //for realtime updates on active users in a chatroom
     socket.on("disconnect", () => {
-        // console.log(socket.roomId);
+        console.log("disconnecting from room: ",socket.roomId);
         io.to(socket.roomId).emit("room-size", 1)
     })
+
     
     socket.on("text-message", async(message) => {
         console.log(message)
@@ -109,12 +127,15 @@ io.on("connection", (socket) => {
         const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
         console.log(formattedTime)
         io.to(socket.roomId).emit("message-received", formattedTime, message.text, message.senderId, message.receiverId, message.readReceipt)
+        // if(room.size === 1){
+            io.to(message.receiverId).emit("message-received", formattedTime, message.text, message.senderId, message.receiverId, message.readReceipt, message.receiverRole)
+        // }
         console.log("event emitted")
     })
 
     socket.on("image-message", async(data) => {
         
-        const { image, convoId, senderId, receiverId, timestamp, readReceipt } = data;
+        const { image, convoId, senderId, receiverId, timestamp, readReceipt, receiverRole } = data;
         console.log("imageData: ",image, convoId)
 
         try {
@@ -129,13 +150,14 @@ io.on("connection", (socket) => {
                 [convoId, senderId, receiverId, fileName, timestamp, false]
             );
 
-            // Emit event to inform clients about the new image
-            // emitImageReceived(socketInstance, file.filename, timestamp, senderId, receiverId, readReceipt);
-
             const time = new Date(timestamp);
             const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
 
-            ioInstance.to(socket.roomId).emit("image-received", fileName, formattedTime, senderId, receiverId, readReceipt);
+            // Emit event to inform clients about the new image
+            io.to(socket.roomId).emit("image-received", fileName, formattedTime, senderId, receiverId, readReceipt);
+            // if(room.size === 1){
+            io.to(receiverId).emit("image-received", fileName, formattedTime, senderId, receiverId, readReceipt, receiverRole);
+            // }
             console.log(formattedTime)
             console.log("event emitted with socket id: ", socket.id)
 
@@ -543,7 +565,7 @@ app.post("/chatListData", async (req, res) => {
         // let companyData = await fetchCompanyDetails();
         data = [...data, companyData]
     }
-    console.log("\n\nfinal data: ",data)
+    // console.log("\n\nfinal data: ",data)
     res.status(200).json(data)
 })
 
@@ -578,24 +600,6 @@ app.post("/getMessages", upload.none(), async (req, res) => {
     console.log("merged: ", mergedData ,"sorted: ", sortedData)
     res.status(200).json(sortedData)
 })
-
-// app.post("/sendChatImage", upload.single('image'), async(req, res) => {
-//     console.log(req.file.filename)
-//     console.log(req.body)
-//     let fileName = req.file.filename;
-//     let {convoId, senderId, receiverId, timestamp, readReceipt} = req.body;
-
-//     await db.query(
-//         `INSERT INTO chat.messages(conversation_id, sender_id, receiver_id, image_name, timestamp, read_receipt)
-//         VALUES($1, $2, $3, $4, $5, $6)`,
-//         [convoId, senderId, receiverId, fileName, timestamp, false]
-//     )
-
-//     emitImageReceived(socketInstance, fileName, timestamp, senderId, receiverId, readReceipt)
-//     console.log("event emitted")
-//     res.sendStatus(200)
-// })
-
 
 // --   passport => auth    --
 passport.use("local",
