@@ -221,15 +221,19 @@ app.post("/register/manager/submit", upload.single('managerProfile'), (req, res)
                     SELECT email FROM delivery_agent_details
                 ) AS all_emails
                 WHERE email = $1`,[email]);
-            if(checkManager.rows.length > 0){
+            const checkTeamManager = await db.query("SELECT * FROM team_details WHERE manager_email = $1", [email])
+            if (checkManager.rows.length > 0) {
                 res.status(400).json({message: "Email already registered. Please try logging in."})
-            }else{
+            } else if(checkTeamManager.rows.length > 0){
+                res.status(400).json({message: "Manager for the team already exists!"})
+            } else {
                 const id = uniqid();
                 db.query(
                     "INSERT INTO manager_details(id, name, email, team_code, company_code, image_name, password, phone_no, role) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                     [id, name, email, teamCode, companyCode, fileName, hash, phoneNo, "manager"]
                 )
                 db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
+                db.query("UPDATE team_details SET manager_email = $1 WHERE team_code = $2", [email, teamCode])
                 res.sendStatus(200)
             }
         } catch (err) {
@@ -311,6 +315,20 @@ app.post("/register/outlet/submit", upload.single('outletProfile'), (req, res) =
     })
 })
 
+app.post("/registerTeam", upload.none(), async (req, res) => {
+    try {
+        console.log("team data: ",req.body)
+        const { teamName, teamCode, companyEmail, companyCode } = req.body;
+        console.log(teamCode, teamName, companyCode, companyEmail)
+
+        await db.query("INSERT INTO team_details(team_code, company_code, company_email, team_name) VALUES($1, $2, $3, $4)", [teamCode, companyCode, companyEmail, teamName])
+        res.sendStatus(200)
+    } catch (error) {
+        console.log(error)
+        res.sendStatus(500)
+    }
+})
+
 
 // --   fetching team/company name  --
 app.get("/getCompanyName", async(req, res) => {
@@ -387,8 +405,8 @@ app.post("/logout", (req, res) => {
 
 // --   others  --
 app.post("/chatListData", async (req, res) => {
-    const {id, role, company_code: code = req.body.code, email} = req.body //code is company code, id is the the currently logged-in user id.. role is the user type
-    console.log("id: ", id, "role: ", role, "code: ", code);
+    const {id, role, company_code: code = req.body.code, email, team_code} = req.body //code is company code, id is the the currently logged-in user id.. role is the user type
+    console.log("id: ", id, "role: ", role, "code: ", code, team_code);
 
     //fectching teams
     let teamResult;
@@ -403,42 +421,45 @@ app.post("/chatListData", async (req, res) => {
     //fetches details from a particular table (manager/agent/outlet_details)
     async function fetchDetails(tableName, teamCode, id) {
         const result = await db.query(`SELECT * FROM ${tableName} WHERE team_code = $1`, [teamCode]);
-        let data = null;
-        let message = null;
-        let role = null;
-        if (result.rows.length > 0) {
-            const rowData = result.rows[0];
-            // returns the latest message of a user
+        const data = [];
+    
+        for (const rowData of result.rows) {
+            // Log each rowData to ensure you're processing the correct data
+            // console.log("Processing rowData: ", rowData);
+    
+            // Fetch the latest message for each user
             const messageData = await db.query(`
-            WITH latest_messages AS (
-                (SELECT *
-                FROM chat.messages
-                WHERE conversation_id = $1
+                WITH latest_messages AS (
+                    (SELECT *
+                    FROM chat.messages
+                    WHERE conversation_id = $1
+                    ORDER BY timestamp DESC
+                    LIMIT 1)
+                    UNION ALL
+                    (SELECT *
+                    FROM chat.messages
+                    WHERE conversation_id = $2
+                    ORDER BY timestamp DESC
+                    LIMIT 1)
+                )
+                SELECT *
+                FROM latest_messages
                 ORDER BY timestamp DESC
-                LIMIT 1)
-                UNION ALL
-                (SELECT *
-                FROM chat.messages
-                WHERE conversation_id = $2
-                ORDER BY timestamp DESC
-                LIMIT 1)
-            )
-            SELECT *
-            FROM latest_messages
-            ORDER BY timestamp DESC
-            LIMIT 1;
+                LIMIT 1;
             `, [id + "_" + rowData.id, rowData.id + "_" + id]);
     
+            let message;
             if (messageData.rows.length > 0) {
                 const { text, timestamp, read_receipt, sender_id } = messageData.rows[0];
                 const time = new Date(timestamp);
-                const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+                const formattedTime = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
                 message = { text, timestamp: formattedTime, readReceipt: read_receipt, senderId: sender_id };
             } else {
                 message = { text: "", timestamp: null, readReceipt: "false", senderId: "" };
             }
     
             // Determine role based on table name
+            let role;
             switch (tableName) {
                 case 'manager_details':
                     role = 'Manager';
@@ -456,20 +477,23 @@ app.post("/chatListData", async (req, res) => {
                     role = 'Unknown';
             }
     
-            data = {
+            // Collect data for the current row
+            data.push({
                 name: rowData.name,
                 id: rowData.id,
                 image_name: rowData.image_name,
                 message,
                 role
-            };
+            });
         }
+        // console.log("result: ", data)
         return data;
     }
-    //fetches deetails from company_details
+    
+    //fetches details from company_details
     async function fetchCompanyDetails(){
         const result = await db.query("SELECT * FROM company_details WHERE code = $1", [code])
-        console.log(result.rows)
+        // console.log(result.rows)
         let data = null;
         let message = null;
         if(result.rows.length > 0){
@@ -521,13 +545,14 @@ app.post("/chatListData", async (req, res) => {
             const managerData = await fetchDetails("manager_details", team.team_code, id);
             const deliveryAgentData = await fetchDetails("delivery_agent_details", team.team_code, id);
             const outletData = await fetchDetails("outlet_details", team.team_code, id);
+            console.log(managerData)
         
             let chatData = null;
             if (managerData || deliveryAgentData || outletData) {
                 chatData = {
                     teamName: team.team_name,
                     teamCode: team.team_code,
-                    teamData: [managerData, deliveryAgentData, outletData].filter(Boolean) // Filter out null values
+                    teamData: [...managerData, ...deliveryAgentData, ...outletData].filter(Boolean) // Filter out null values
                 };
             } else {
                 chatData = {
@@ -564,8 +589,35 @@ app.post("/chatListData", async (req, res) => {
         }));
         // let companyData = await fetchCompanyDetails();
         data = [...data, companyData]
+    } else if (role === "delivery_agent") {
+        
+        const companyData = await fetchCompanyDetails();
+        const managerData = await fetchDetails("manager_details", team_code, id);
+        data = await Promise.all(teamResult.rows.map(async (team) => {
+            if(team.team_code === team_code){
+                const outletData = await fetchDetails("outlet_details", team.team_code, id);
+            
+                let chatData = null;
+                if(outletData){
+                    chatData = {
+                        teamName: team.team_name,
+                        teamCode: team.team_code,
+                        teamData: [outletData].filter(Boolean) //Filter out null values
+                    };
+                } else {
+                    chatData = {
+                        teamName: team.team_name,
+                        teamCode: team.team_code,
+                        teamData: null
+                    };
+                }
+                return chatData;
+            }
+        }));
+        data = [...data, companyData, managerData].filter(Boolean)
     }
-    // console.log("\n\nfinal data: ",data)
+
+    console.log("\n\nfinal data: ",data)
     res.status(200).json(data)
 })
 
@@ -622,7 +674,7 @@ passport.use("local",
                     redirectURL = '/manager/home';
                 } else if(type === 'deliveryAgent'){
                     tableName = 'delivery_agent_details';
-                    redirectURL = '/deliveryAgent/home';
+                    redirectURL = '/delivery_agent/home';
                 } else if(type === 'outlet'){
                     tableName = 'outlet_details';
                     redirectURL = '/outlet/home';
@@ -651,7 +703,9 @@ passport.use("local",
             } catch (err) {
                 console.log(err);
             }
-    }));
+        }
+    )
+);
 
 passport.serializeUser((user, cb) => {
     cb(null, user);
