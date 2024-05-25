@@ -575,7 +575,7 @@ app.post("/chatListData", async (req, res) => {
                 chatData = {
                     teamName: team.team_name,
                     teamCode: team.team_code,
-                    teamData: [deliveryAgentData, outletData].filter(Boolean) //Filter out null values
+                    teamData: [...deliveryAgentData, ...outletData].filter(Boolean) //Filter out null values
                 };
             } else {
                 chatData = {
@@ -602,7 +602,7 @@ app.post("/chatListData", async (req, res) => {
                     chatData = {
                         teamName: team.team_name,
                         teamCode: team.team_code,
-                        teamData: [outletData].filter(Boolean) //Filter out null values
+                        teamData: [...outletData].filter(Boolean) //Filter out null values
                     };
                 } else {
                     chatData = {
@@ -614,7 +614,32 @@ app.post("/chatListData", async (req, res) => {
                 return chatData;
             }
         }));
-        data = [...data, companyData, managerData].filter(Boolean)
+        data = [...data, companyData, managerData[0]].filter(Boolean)
+    } else if (role === "outlet") {
+        const companyData = await fetchCompanyDetails();
+        const managerData = await fetchDetails("manager_details", team_code, id);
+        data = await Promise.all(teamResult.rows.map(async (team) => {
+            if(team.team_code === team_code){
+                const deliveryAgentData = await fetchDetails("delivery_agent_details", team.team_code, id);
+            
+                let chatData = null;
+                if(deliveryAgentData){
+                    chatData = {
+                        teamName: team.team_name,
+                        teamCode: team.team_code,
+                        teamData: [...deliveryAgentData].filter(Boolean) //Filter out null values
+                    };
+                } else {
+                    chatData = {
+                        teamName: team.team_name,
+                        teamCode: team.team_code,
+                        teamData: null
+                    };
+                }
+                return chatData;
+            }
+        }));
+        data = [...data, companyData, managerData[0]].filter(Boolean)
     }
 
     console.log("\n\nfinal data: ",data)
