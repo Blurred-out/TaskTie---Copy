@@ -245,6 +245,8 @@ app.post("/register/manager/submit", upload.single('managerProfile'), (req, res)
 
 app.post("/register/deliveryAgent/submit", upload.single('deliveryAgentProfile'), (req, res) => {
     let {deliveryAgentName: name, deliveryAgentContactNo: phoneNo, deliveryAgentEmail: email, companyCode, teamCode, password} = req.body
+    const loc = JSON.parse(req.body.coords)
+    console.log(loc)
     let fileName;
     if(req.file){fileName = req.file.filename}
 
@@ -270,6 +272,7 @@ app.post("/register/deliveryAgent/submit", upload.single('deliveryAgentProfile')
                     [id, name, email, teamCode, companyCode, fileName, hash, phoneNo, "delivery_agent"]
                 )
                 db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
+                db.query("INSERT INTO map.delivery_agent(name, user_id, latitude, longitude, image_name) VALUES($1, $2, $3, $4, $5)", [name, id, loc.lat, loc.lng, fileName])
                 res.sendStatus(200)
             }
         } catch (err) {
@@ -281,8 +284,10 @@ app.post("/register/deliveryAgent/submit", upload.single('deliveryAgentProfile')
 
 app.post("/register/outlet/submit", upload.single('outletProfile'), (req, res) => {
     let {outletName: name, outletContactNo: phoneNo, outletEmail: email, outletAddress: address, companyCode, teamCode, password} = req.body
+    const loc = JSON.parse(req.body.coords)
     let fileName;
     if(req.file){fileName = req.file.filename}
+    console.log(loc)
 
     bcrypt.hash(password, saltingRounds, async(err, hash) => {
         try {
@@ -306,6 +311,7 @@ app.post("/register/outlet/submit", upload.single('outletProfile'), (req, res) =
                     [id, name, email, address, teamCode, companyCode, fileName, hash, phoneNo, "outlet"]
                 )
                 db.query("INSERT INTO chat.users(user_id, name) VALUES($1, $2)", [id, name])
+                db.query("INSERT INTO map.outlet(name,  user_id, address, latitude, longitude, image_name) VALUES($1, $2, $3, $4, $5, $6)", [name, id, address, loc.lat, loc.lng, fileName])
                 res.sendStatus(200)
             }
         } catch (err) {
@@ -403,7 +409,7 @@ app.post("/logout", (req, res) => {
 })
 
 
-// --   others  --
+//  --  chat handlers   --
 app.post("/chatListData", async (req, res) => {
     const {id, role, company_code: code = req.body.code, email, team_code} = req.body //code is company code, id is the the currently logged-in user id.. role is the user type
     console.log("id: ", id, "role: ", role, "code: ", code, team_code);
@@ -646,10 +652,6 @@ app.post("/chatListData", async (req, res) => {
     res.status(200).json(data)
 })
 
-app.get("/currentUser", (req, res) => {
-    res.status(200).json(req.user);
-})
-
 app.post("/getMessages", upload.none(), async (req, res) => {
     const receivedData = req.body;
     // console.log(receivedData)
@@ -677,6 +679,130 @@ app.post("/getMessages", upload.none(), async (req, res) => {
     console.log("merged: ", mergedData ,"sorted: ", sortedData)
     res.status(200).json(sortedData)
 })
+
+// [
+//     {
+//       id: 2,
+//       team_code: 'poke',
+//       company_code: '7YP53P',
+//       company_email: 'company@gmail.com',
+//       team_name: 'Wonderla',
+//       manager_email: 'manager@gmail.com'
+//     },
+//     {
+//       id: 1,
+//       team_code: 'hooh',
+//       company_code: '7YP53P',
+//       company_email: 'company@gmail.com',
+//       team_name: 'Island',
+//       manager_email: 'manager2@gmail.com'
+//     },
+//     {
+//       id: 3,
+//       team_code: '3cWc',
+//       company_code: '7YP53P',
+//       company_email: 'company@gmail.com',
+//       team_name: 'here',
+//       manager_email: 'manager3@gmail.com'
+//     }
+//   ]
+
+
+// --   map handlers    --
+app.post("/mapListData", async(req, res) => {
+    const {id, role, code: companyCode, email, team_code: teamCode} = req.body;
+    console.log(id, role, companyCode ,email, teamCode);
+
+    let teamResult;
+    if(role === "company"){
+        teamResult = await db.query(`SELECT * FROM team_details WHERE company_code = $1`, [companyCode])
+        // console.log(teamResult.rows)
+    }
+
+    async function fetchTeamData(tableName, teamCode, id){
+        const result = await db.query(`SELECT * FROM ${tableName} WHERE team_code = $1`, [teamCode])
+        let data = [];
+
+        let role;
+        switch (tableName) {
+            case 'manager_details':
+                role = 'Manager';
+                break;
+            case 'delivery_agent_details':
+                role = 'Agent';
+                break;
+            case 'outlet_details':
+                role = 'Outlet';
+                break;
+            case 'company_details':
+                role = 'Company';
+                break;
+            default:
+                role = 'Unknown';
+        }
+
+        for(const rowData of result.rows) {
+            let locData;
+            if (role === "Agent" || role === "Outlet") {
+                locData = await fetchLocationFromDB(tableName, rowData.id)
+            }
+
+            data.push({
+                name: rowData.name,
+                id: rowData.id,
+                image_name: rowData.image_name,
+                role,
+                coords:{
+                    lat: locData[0]?.latitude,
+                    lng: locData[0]?.longitude
+                },
+                address: rowData.address,
+                PhoneNo: rowData.phone_no
+            });
+        }
+        console.log("L759:", data)
+        return data;
+    }
+
+    async function fetchLocationFromDB(table_name, user_id){
+        const result = await db.query(`SELECT * FROM map.${table_name} WHERE user_id = $1`, [user_id])
+        return result.rows;
+    }
+
+    let data;
+    if (role === "company") {
+        data = await Promise.all(teamResult.rows.map(async (team) => {
+            const outletData = await fetchTeamData("outlet_details", team.team_code, id)
+            const deliveryAgentData = await fetchTeamData("delivery_agent_details", team.team_code, id)
+
+            let chatData = null;
+            if (outletData || deliveryAgentData) {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: [...outletData, ...deliveryAgentData]
+                };
+            } else {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: null
+                };
+            }
+            return chatData;
+        }))
+    }
+
+    console.log("final: ", data)
+    res.status(200).json(data)
+})
+
+
+// --   others  --
+app.get("/currentUser", (req, res) => {
+    res.status(200).json(req.user);
+})
+
 
 // --   passport => auth    --
 passport.use("local",
