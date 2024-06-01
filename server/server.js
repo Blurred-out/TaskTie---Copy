@@ -80,6 +80,7 @@ const upload = multer({ storage: storage });
 let room;
 // --  socket io setup    --
 io.on("connection", (socket) => {
+    /*      chat socket      */
     // console.log("connected to server, socket_id:",socket.id)
     socket.on("join-room", roomId => {
         socket.roomId = roomId;
@@ -111,11 +112,15 @@ io.on("connection", (socket) => {
 
     //for realtime updates on active users in a chatroom
     socket.on("disconnect", () => {
-        console.log("disconnecting from room: ",socket.roomId);
-        io.to(socket.roomId).emit("room-size", 1)
+        if(socket.roomId){
+            console.log("disconnecting from chat room: ",socket.roomId);
+            io.to(socket.roomId).emit("room-size", 1)
+        } else if (socket.mapRoomId) {
+            console.log("disconnecting from map room: ",socket.mapRoomId);
+        }
+        
     })
 
-    
     socket.on("text-message", async(message) => {
         console.log(message)
         await db.query(
@@ -164,6 +169,19 @@ io.on("connection", (socket) => {
         } catch (err) {
             console.error("Error handling image upload:", err);
         }
+    })
+
+    /*      map socket       */
+    socket.on("join-map-room", mapRoomId => {
+        socket.mapRoomId = mapRoomId;
+        socket.join(mapRoomId);
+        console.log("joined room: ", mapRoomId)
+    })
+
+    socket.on("update-agent-location", async (id, coords) => {
+        console.log("new location: ", id, coords);
+        await db.query("UPDATE map.delivery_agent_details SET latitude = $1, longitude = $2 WHERE user_id = $3", [coords.lat, coords.lng, id])
+        socket.emit("agent-location-updated", id, coords)
     })
 })
 
@@ -714,13 +732,23 @@ app.post("/mapListData", async(req, res) => {
     console.log(id, role, companyCode ,email, teamCode);
 
     let teamResult;
-    if(role === "company"){
+    if (role === "company") {
         teamResult = await db.query(`SELECT * FROM team_details WHERE company_code = $1`, [companyCode])
         // console.log(teamResult.rows)
+    } else if (role === "manager") {
+        teamResult = await db.query(`SELECT * FROM team_details WHERE manager_email = $1`, [email])
+    } else if (role === "outlet" || role === "delivery_agent") {
+        teamResult = await db.query(`SELECT * FROM team_details WHERE team_code = $1`, [teamCode])
     }
 
-    async function fetchTeamData(tableName, teamCode, id){
-        const result = await db.query(`SELECT * FROM ${tableName} WHERE team_code = $1`, [teamCode])
+    async function fetchTeamData(tableName, teamCode, id = null){
+        let result;
+        if (id === null) {
+            result = await db.query(`SELECT * FROM ${tableName} WHERE team_code = $1`, [teamCode])
+        } else {
+            result = await db.query(`SELECT * FROM ${tableName} WHERE id = $1`, [id])
+        }
+        
         let data = [];
 
         let role;
@@ -746,21 +774,23 @@ app.post("/mapListData", async(req, res) => {
             if (role === "Agent" || role === "Outlet") {
                 locData = await fetchLocationFromDB(tableName, rowData.id)
             }
+            // console.log(rowData)
 
             data.push({
-                name: rowData.name,
                 id: rowData.id,
-                image_name: rowData.image_name,
+                name: rowData.name,
                 role,
+                image_name: rowData.image_name,
+                address: rowData.address,
+                phone_no: rowData.phone_no,
                 coords:{
                     lat: locData[0]?.latitude,
                     lng: locData[0]?.longitude
                 },
-                address: rowData.address,
-                PhoneNo: rowData.phone_no
+                company_code: rowData.company_code,
             });
         }
-        console.log("L759:", data)
+        // console.log("L773:", data)
         return data;
     }
 
@@ -770,13 +800,55 @@ app.post("/mapListData", async(req, res) => {
     }
 
     let data;
-    if (role === "company") {
+    if (role === "company" || role === "manager") {
         data = await Promise.all(teamResult.rows.map(async (team) => {
-            const outletData = await fetchTeamData("outlet_details", team.team_code, id)
-            const deliveryAgentData = await fetchTeamData("delivery_agent_details", team.team_code, id)
+            const outletData = await fetchTeamData("outlet_details", team.team_code)
+            const deliveryAgentData = await fetchTeamData("delivery_agent_details", team.team_code)
 
             let chatData = null;
             if (outletData || deliveryAgentData) {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: [...outletData, ...deliveryAgentData]
+                };
+            } else {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: null
+                };
+            }
+            return chatData;
+        }))
+    } else if (role === "outlet") {
+        data = await Promise.all(teamResult.rows.map(async (team) => {
+            const outletData = await fetchTeamData("outlet_details", team.team_code, id)
+            const deliveryAgentData = await fetchTeamData("delivery_agent_details", team.team_code)
+
+            let chatData = null;
+            if (deliveryAgentData) {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: [...outletData, ...deliveryAgentData]
+                };
+            } else {
+                chatData = {
+                    teamName: team.team_name,
+                    teamCode: team.team_code,
+                    teamData: null
+                };
+            }
+            return chatData;
+        }))
+    } else if (role === "delivery_agent") {
+        data = await Promise.all(teamResult.rows.map(async (team) => {
+            const outletData = await fetchTeamData("outlet_details", team.team_code)
+            const deliveryAgentData = await fetchTeamData("delivery_agent_details", team.team_code,id)
+
+            let chatData = null;
+            if (deliveryAgentData) {
                 chatData = {
                     teamName: team.team_name,
                     teamCode: team.team_code,
