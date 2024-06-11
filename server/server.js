@@ -11,7 +11,9 @@ import uniqid from "uniqid";
 import { Server } from "socket.io";
 import http from "http";
 import fs from "fs";
-import { instrument } from "@socket.io/admin-ui"
+import { instrument } from "@socket.io/admin-ui";
+import moment from "moment";
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -932,64 +934,41 @@ app.post("/product/data/:productId", async (req, res) => {
     }
 })
 
-// [
-//     {
-//       product_id: 'txp',
-//       quantity: 2,
-//       product_name: 'u see...i',
-//       price: 43,
-//       total_price: 86
-//     },
-//     {
-//       product_id: 'txjga9bclx6ykvu5',
-//       quantity: 6,
-//       product_name: 'was it worth it?',
-//       price: 335,
-//       total_price: 2010
-//     }
-//   ] {
-//     id: 'txjga5r0lwiktyud',
-//     name: 'user_O',
-//     email: 'outlet@gmail.com',
-//     team_code: 'poke',
-//     company_code: '7YP53P',
-//     image_name: null,
-//     password: '$2b$10$.kTqyrK0VCjgQEaVcGumYuqk800ZcCIieGX5HRauNCeLbd57PT4vW',
-//     phone_no: '0987654321',
-//     address: 'outlet..near outlet',
-//     role: 'outlet'
-//   }
-
 app.post("/updateCart", async (req, res) => {
     const { cart, user } = req.body;
     console.log(cart, user);
 
     const checkCart = await db.query("SELECT * FROM order_details.cart WHERE user_id = $1", [user.id]);
-    if (checkCart.rows.length > 0) {
-        for (const item of cart) {
-            const checkItem = await db.query("SELECT * FROM order_details.cart_items WHERE cart_id = $1 AND product_id = $2", [checkCart.rows[0].cart_id, item.product_id]);
-            console.log("checkItem result: ", checkItem.rows);
+    let cartId;
 
-            if (checkItem.rows.length > 0) {
-                // If the item already exists, increment the quantity
-                const currentQuantity = checkItem.rows[0].quantity;
-                const newQuantity = currentQuantity + item.quantity;
-                if (newQuantity > 0) {
-                    const totalAmount = newQuantity * item.price;
-                    await db.query("UPDATE order_details.cart_items SET quantity = $1, price_per_unit = $2, total_amount = $3 WHERE cart_id = $4 AND product_id = $5", [newQuantity, item.price, totalAmount, checkCart.rows[0].cart_id, item.product_id]);
-                } else {
-                    // Do not delete the item if the new quantity is 0
-                    console.log(`Skipping update for product_id ${item.product_id} as new quantity is 0`);
-                }
+    if (checkCart.rows.length > 0) {
+        cartId = checkCart.rows[0].cart_id;
+    } else {
+        const newCart = await db.query("INSERT INTO order_details.cart (user_id, amount) VALUES ($1, $2) RETURNING cart_id", [user.id, 0]);
+        cartId = newCart.rows[0].cart_id;
+    }
+
+    for (const item of cart) {
+        const checkItem = await db.query("SELECT * FROM order_details.cart_items WHERE cart_id = $1 AND product_id = $2", [cartId, item.product_id]);
+        console.log("checkItem result: ", checkItem.rows);
+
+        if (checkItem.rows.length > 0) {
+            // If the item already exists, increment the quantity
+            const currentQuantity = checkItem.rows[0].quantity;
+            const newQuantity = currentQuantity + item.quantity;
+            if (newQuantity > 0) {
+                const totalAmount = newQuantity * item.price;
+                await db.query("UPDATE order_details.cart_items SET quantity = $1, price_per_unit = $2, total_amount = $3 WHERE cart_id = $4 AND product_id = $5", [newQuantity, item.price, totalAmount, cartId, item.product_id]);
             } else {
-                if (item.quantity > 0) {
-                    // Insert the new item
-                    await db.query("INSERT INTO order_details.cart_items(cart_id, product_id, product_name, quantity, outlet_id, outlet_name, price_per_unit, total_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", [checkCart.rows[0].cart_id, item.product_id, item.product_name, item.quantity, user.id, user.name, item.price, item.total_price]);
-                }
+                // Do not delete the item if the new quantity is 0
+                console.log(`Skipping update for product_id ${item.product_id} as new quantity is 0`);
+            }
+        } else {
+            if (item.quantity > 0) {
+                // Insert the new item
+                await db.query("INSERT INTO order_details.cart_items(cart_id, product_id, product_name, quantity, outlet_id, outlet_name, price_per_unit, total_amount) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", [cartId, item.product_id, item.product_name, item.quantity, user.id, user.name, item.price, item.total_price]);
             }
         }
-    } else {
-        await db.query("INSERT INTO order_details.cart (user_id, amount) VALUES ($1, $2)", [user.id, 0]);
     }
 
     res.status(200).send("Cart updated successfully");
@@ -1005,7 +984,6 @@ app.post("/updateCartDirect", async (req, res) => {
 
     res.status(200).send("Cart updated successfully");
 });
-
 
 app.post("/cartDetails", async (req, res) => {
     const user = req.body;
@@ -1040,7 +1018,10 @@ app.post("/order", async (req, res) => {
 
     let totalPrice = data.reduce((acc, item) => acc + item.total_amount, 0)
     
-    const orderResult = await db.query("INSERT INTO order_details.orders(order_timestamp, status, amount) VALUES($1, $2, $3) RETURNING *;", [timestamp, "waiting to be accepted", totalPrice])
+    const orderResult = await db.query(
+        "INSERT INTO order_details.orders(order_timestamp, status, amount, outlet_id, team_code, company_code, outlet_name) VALUES($1, $2, $3, $4, $5, $6, $7) RETURNING *;",
+        [timestamp, "waiting to be accepted", totalPrice, user.id, user.team_code, user.company_code, user.name]
+    )
     let orderId = orderResult.rows[0].order_id;
     console.log("orderid: ", orderId)
 
@@ -1053,7 +1034,95 @@ app.post("/order", async (req, res) => {
         await db.query("DELETE FROM order_details.cart_items WHERE cart_id = $1 AND outlet_id = $2", [item.cart_id, user.id])
     }
 
+    // io.emit("")
+
     res.sendStatus(200);
+})
+
+// --   order page handlers  --
+app.post("/ordersData", async (req, res) => {
+    const user = req.body;
+    let code;
+    let columnName = "company_code";
+
+    user.role === "company" ? code = user.code : (code = user.team_code, columnName = "team_code")
+
+    // for company 
+    const ordersListResult = await db.query(`SELECT * FROM order_details.orders WHERE ${columnName} = $1`, [code])
+    let data = ordersListResult.rows;
+    const updatedData = await Promise.all(
+        data.map(async (order) => {
+            const imageResult = await db.query("SELECT * FROM outlet_details WHERE id = $1", [order.outlet_id]);
+            const teamNameResult = await db.query("SELECT * FROM team_details WHERE team_code = $1", [order.team_code]);
+            return {
+                ...order,
+                outlet_image_name: imageResult.rows[0].image_name,
+                team_name: teamNameResult.rows[0].team_name,
+            };
+        })
+    );
+
+    res.status(200).json(updatedData)
+})
+
+    /* 
+        order_id
+        outlet_name
+        outlet_image_name
+        outlet_team_name
+        order_date
+        order_time
+
+        item_image_name
+        item_name
+        item_price_per_unit
+        item_total_amount
+        
+
+        total amount
+        outlet_address
+    */
+
+app.post("/orderData", async (req, res) => {
+    const { orderId, user} = req.body;
+    const orderResult = await db.query("SELECT * FROM order_details.orders WHERE order_id = $1", [orderId])
+    const orderData = orderResult.rows[0];
+
+    const outletResult = await db.query("SELECT * FROM outlet_details WHERE id = $1", [orderData.outlet_id])
+    const teamResult = await db.query("SELECT * FROM team_details WHERE team_code = $1", [outletResult.rows[0].team_code])
+
+    const orderItemsResult = await db.query("SELECT * FROM order_details.order_items WHERE order_id = $1", [orderId])
+    const orderItemsData = orderItemsResult.rows;
+    let orderItems = [];
+    await Promise.all(
+        orderItemsData.map(async (item) => {
+            const imageResult = await db.query("SELECT * FROM product.products WHERE product_id = $1", [item.product_id])
+            orderItems.push({
+                image_name: imageResult.rows[0].image_name,
+                name: item.product_name,
+                price_per_unit: item.price_per_unit,
+                total_amount: item.total_amount,
+                quantity: item.quantity,
+            })
+        })
+    )
+
+    const totalAmount = orderItems.reduce((acc, item) => acc + item.total_amount, 0)
+    
+    const data = {
+        id: orderId,
+        name: orderData.outlet_name,
+        image_name: outletResult.rows[0].image_name,
+        team_name: teamResult.rows[0].team_name,
+        address: outletResult.rows[0].address,
+        date: moment(orderData.order_timestamp).format("DD/MM/YY"),
+        time: moment(orderData.order_timestamp).format("hh:mm A"),
+
+        items: orderItems,
+        total_amount: totalAmount,
+    }
+
+    res.status(200).json(data)
 })
 
 
