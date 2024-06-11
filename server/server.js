@@ -175,16 +175,30 @@ io.on("connection", (socket) => {
 
     /*      map socket       */
     socket.on("join-map-room", mapRoomId => {
-        socket.mapRoomId = mapRoomId;
-        socket.join(mapRoomId);
-        io.to(mapRoomId).emit("map-room-joined")
-        console.log("joined room: ", mapRoomId);
+        const { companyCode, teamCode } = mapRoomId;
+        companyCode && socket.join(companyCode);
+        teamCode  && socket.join(teamCode);
+        socket.teamCode = teamCode;
+        socket.companyCode = companyCode;
+        io.to(companyCode).to(teamCode).emit("map-room-joined")
+        console.log("joined room: ", companyCode, teamCode);
     })
 
     socket.on("update-agent-location", async (id, coords) => {
         console.log("new location: ", id, coords, socket.mapRoomId);
         await db.query("UPDATE map.delivery_agent_details SET latitude = $1, longitude = $2 WHERE user_id = $3", [coords.lat, coords.lng, id])
-        io.to(socket.mapRoomId).emit("agent-location-updated", id, coords)
+        io.to(socket.teamCode).to(socket.companyCode).emit("agent-location-updated", id, coords)
+    })
+
+    /*      order socket       */
+    socket.on("join-order-room", orderRoomId => {
+        const { companyCode, teamCode } = orderRoomId;
+        companyCode && socket.join(companyCode);
+        teamCode && socket.join(teamCode);
+        socket.teamCode = teamCode;
+        socket.companyCode = companyCode;
+        io.to(companyCode).to(teamCode).emit("order-room-joined")
+        console.log("joined room: ", companyCode, teamCode);
     })
 })
 
@@ -747,9 +761,12 @@ app.post("/mapListData", async(req, res) => {
 
         for(const rowData of result.rows) {
             let locData;
+            let orderData;
             if (role === "Agent" || role === "Outlet") {
                 locData = await fetchLocationFromDB(tableName, rowData.id)
+                role ===  "Outlet" ? (orderData = await fetchPendingOrders(rowData.id)) : (orderData = await fetchPendingDeliveries(rowData.id));
             }
+
             // console.log(rowData)
 
             data.push({
@@ -764,6 +781,7 @@ app.post("/mapListData", async(req, res) => {
                     lng: locData[0]?.longitude
                 },
                 company_code: rowData.company_code,
+                orderData: orderData,
             });
         }
         // console.log("L773:", data)
@@ -774,6 +792,45 @@ app.post("/mapListData", async(req, res) => {
         const result = await db.query(`SELECT * FROM map.${table_name} WHERE user_id = $1`, [user_id])
         return result.rows;
     }
+
+    //      order data of outlets
+    async function fetchPendingOrders(id){
+        const newOrderResult = await db.query(
+            "SELECT * FROM order_details.orders WHERE outlet_id = $1 AND status = $2", 
+            [id, "New"]
+        )
+
+        const pendingOrdersResult = await db.query(
+            "SELECT * FROM order_details.orders WHERE outlet_id = $1 AND status = $2",
+            [id, "Pending"]
+        )
+
+        let data = [];
+        newOrderResult.rows.map((order) => {
+            data.push({orderId: order.order_id, timestamp: order.order_timestamp, status: "New"})
+        })
+        pendingOrdersResult.rows.map((order) => {
+            data.push({orderId: order.order_id, timestamp: order.order_timestamp, status: "Pending"})
+        })
+
+        return data;
+    }
+
+    //      order data of agents
+    async function fetchPendingDeliveries(id){
+        const pendingOrdersResult = await db.query(
+            "SELECT * FROM order_details.orders WHERE agent_id = $1 AND status = $2",
+            [id, "Pending"]
+        )
+
+        let data = [];
+        pendingOrdersResult.rows.map((order) => {
+            data.push({orderId: order.order_id, timestamp: order.order_timestamp, status: "Pending"})
+        })
+
+        return data;
+    }
+
 
     let data;
     if (role === "company" || role === "manager") {
@@ -1020,7 +1077,7 @@ app.post("/order", async (req, res) => {
     
     const orderResult = await db.query(
         "INSERT INTO order_details.orders(order_timestamp, status, amount, outlet_id, team_code, company_code, outlet_name) VALUES($1, $2, $3, $4, $5, $6, $7) RETURNING *;",
-        [timestamp, "waiting to be accepted", totalPrice, user.id, user.team_code, user.company_code, user.name]
+        [timestamp, "New", totalPrice, user.id, user.team_code, user.company_code, user.name]
     )
     let orderId = orderResult.rows[0].order_id;
     console.log("orderid: ", orderId)
@@ -1034,7 +1091,16 @@ app.post("/order", async (req, res) => {
         await db.query("DELETE FROM order_details.cart_items WHERE cart_id = $1 AND outlet_id = $2", [item.cart_id, user.id])
     }
 
-    // io.emit("")
+    let mapOrderData = {
+        orderId: orderId,
+        timestamp: timestamp,
+        status: "New"
+    }
+
+
+    io.to(user.company_code).to(user.team_code).emit("new-order", user.id, mapOrderData, orderResult.rows[0])
+
+    // io.to(user)
 
     res.sendStatus(200);
 })
@@ -1050,7 +1116,7 @@ app.post("/ordersData", async (req, res) => {
     // for company 
     const ordersListResult = await db.query(`SELECT * FROM order_details.orders WHERE ${columnName} = $1`, [code])
     let data = ordersListResult.rows;
-    const updatedData = await Promise.all(
+    let updatedData = await Promise.all(
         data.map(async (order) => {
             const imageResult = await db.query("SELECT * FROM outlet_details WHERE id = $1", [order.outlet_id]);
             const teamNameResult = await db.query("SELECT * FROM team_details WHERE team_code = $1", [order.team_code]);
@@ -1061,6 +1127,12 @@ app.post("/ordersData", async (req, res) => {
             };
         })
     );
+
+    if (user.role === "delivery_agent") {
+        updatedData = updatedData.filter(order => order.agent_id === user.id)
+    } else if (user.role === "outlet") {
+        updatedData = updatedData.filter(order => order.outlet_id === user.id)
+    }
 
     res.status(200).json(updatedData)
 })
