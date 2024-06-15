@@ -13,6 +13,7 @@ import http from "http";
 import fs from "fs";
 import { instrument } from "@socket.io/admin-ui";
 import moment from "moment";
+import { time } from "console";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -119,6 +120,8 @@ io.on("connection", (socket) => {
             io.to(socket.roomId).emit("room-size", 1)
         } else if (socket.mapRoomId) {
             console.log("disconnecting from map room: ",socket.mapRoomId);
+        } else {
+            console.log("socket disconnecting from idk room, id: ", socket.id)
         }
         
     })
@@ -1049,6 +1052,7 @@ app.post("/cartDetails", async (req, res) => {
             SELECT 
                 ci.*, 
                 p.image_name,
+                p.description,
                 CASE 
                     WHEN p.discounted_price IS NOT NULL THEN p.discounted_price 
                     ELSE p.price 
@@ -1097,10 +1101,23 @@ app.post("/order", async (req, res) => {
         status: "New"
     }
 
+    let companyMapOrderData = {
+        orderId: orderId,
+        timestamp: timestamp,
+        status: "New",
+        from: "company room"
+    }
 
-    io.to(user.company_code).to(user.team_code).emit("new-order", user.id, mapOrderData, orderResult.rows[0])
+    let teamMapOrderData = {
+        orderId: orderId,
+        timestamp: timestamp,
+        status: "New",
+        from: "team room"
+    }
 
-    // io.to(user)
+
+    io.to(user.company_code).emit("new-order", user.id, companyMapOrderData, orderResult.rows[0])
+    io.to(user.team_code).emit("new-order", user.id, teamMapOrderData, orderResult.rows[0])
 
     res.sendStatus(200);
 })
@@ -1129,7 +1146,7 @@ app.post("/ordersData", async (req, res) => {
     );
 
     if (user.role === "delivery_agent") {
-        updatedData = updatedData.filter(order => order.agent_id === user.id)
+        updatedData = updatedData.filter(order => (order.agent_id === user.id || order.agent_id === null))
     } else if (user.role === "outlet") {
         updatedData = updatedData.filter(order => order.outlet_id === user.id)
     }
@@ -1189,12 +1206,33 @@ app.post("/orderData", async (req, res) => {
         address: outletResult.rows[0].address,
         date: moment(orderData.order_timestamp).format("DD/MM/YY"),
         time: moment(orderData.order_timestamp).format("hh:mm A"),
+        status: orderData.status,
 
         items: orderItems,
         total_amount: totalAmount,
     }
 
     res.status(200).json(data)
+})
+
+app.post("/acceptOrder", async (req, res) => {
+    const { orderId, timestamp, user } = req.body;
+    console.log( orderId, timestamp, user )
+    const updatedResult = await db.query("UPDATE order_details.orders SET agent_id = $1, status = $2, delivery_timestamp = $3, agent_name = $4 WHERE order_id = $5 RETURNING *", [user.id, "Pending", timestamp, user.name, orderId])
+    console.log(updatedResult.rows[0])
+
+    io.to(user.company_code).to(user.team_code).emit("pending-order", updatedResult.rows[0])
+    res.sendStatus(200)
+})
+
+app.post("/orderReceived", async(req, res) => {
+    const { orderId, timestamp, user } = req.body;
+    console.log( orderId, timestamp, user )
+    const updatedResult = await db.query("UPDATE order_details.orders SET agent_id = $1, status = $2, received_timestamp = $3, agent_name = $4 WHERE order_id = $5 RETURNING *", [user.id, "Delivered", timestamp, user.name, orderId])
+    console.log(updatedResult.rows[0])
+
+    io.to(user.company_code).to(user.team_code).emit("order-received", updatedResult.rows[0])
+    res.sendStatus(200)
 })
 
 
