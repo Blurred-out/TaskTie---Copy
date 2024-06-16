@@ -720,7 +720,7 @@ app.post("/getMessages", upload.none(), async (req, res) => {
 
 
 // --   map handlers    --
-app.post("/mapListData", async(req, res) => {
+app.post("/mapListData", async (req, res) => {
     const {id, role, code: companyCode, email, team_code: teamCode} = req.body;
     console.log(id, role, companyCode ,email, teamCode);
 
@@ -903,6 +903,20 @@ app.post("/mapListData", async(req, res) => {
 
     console.log("final: ", data)
     res.status(200).json(data)
+})
+
+app.post("/fetchLocation",  async (req, res) => {
+    const {userId} = req.body;
+    console.log(userId)
+    try {
+        const result = await db.query("SELECT * FROM map.outlet_details WHERE user_id = $1", [userId])
+        const data = result.rows[0]
+        console.log(data)
+        res.send({Lat: data.latitude, Lng: data.longitude}).status(200)
+    } catch (error) {
+        console.log("error fetching outlet location for dir: ", error)
+        res.sendStatus(500)
+    }
 })
 
 
