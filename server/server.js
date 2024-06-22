@@ -13,8 +13,6 @@ import http from "http";
 import fs from "fs";
 import { instrument } from "@socket.io/admin-ui";
 import moment from "moment";
-import { time } from "console";
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -372,6 +370,26 @@ app.post("/registerTeam", upload.none(), async (req, res) => {
         res.sendStatus(500)
     }
 })
+
+app.post('/checkCode', async (req, res) => {
+    const {code, len} = req.body;
+    console.log(code, len)
+
+    let query = "";
+    if (len === 4) {
+        query = "SELECT 1 FROM team_details WHERE team_code = $1";
+    } else if (len === 6) {
+        query = "SELECT 1 FROM company_details WHERE code = $1";
+    }
+
+    const result = await db.query(query, [code]);
+    let isUnique = false;
+    if (result.rows.length === 0) {
+        isUnique = true;
+    }
+    console.log(isUnique)
+    res.status(200).send(isUnique)
+});
 
 
 // --   fetching team/company name  --
