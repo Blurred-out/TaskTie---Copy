@@ -13,6 +13,7 @@ import http from "http";
 import fs from "fs";
 import { instrument } from "@socket.io/admin-ui";
 import moment from "moment";
+import nodemailer from "nodemailer"
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -391,6 +392,84 @@ app.post('/checkCode', async (req, res) => {
     res.status(200).send(isUnique)
 });
 
+app.post("/sendOTPToMail", async(req, res) => {
+    const { email } = req.body
+    console.log(email)
+
+    const transporter = nodemailer.createTransport({
+        host: "smtp.gmail.com",
+        port: 587,
+        secure: false, // Use `true` for port 465, `false` for all other ports
+        auth: {
+            user: "vivek22112005@gmail.com",
+            pass: "yapp unzm ihrg ekkz",
+        },
+    });
+
+    async function createAndStoreOTP(){
+        let OTP;
+
+        const checkEmail = await db.query("SELECT * FROM mail_otps WHERE email = $1", [email])
+        if (checkEmail.rows.length > 0){
+            OTP = checkEmail.rows[0].otp;
+        } else {
+            OTP = Math.floor(Math.random()*1000000);
+            OTP = OTP.toString().padStart(6, '0');
+            let timestamp = moment().add(10, 'minutes').format('YYYY-MM-DD HH:mm:ss');
+            await db.query("INSERT INTO mail_otps(email, otp, expiry_timestamp) VALUES($1, $2, $3)", [email, OTP, timestamp])
+        }
+        console.log("OTP: ", OTP)
+        return OTP;
+    }
+
+    async function OTPHandler() {
+        const OTP = await createAndStoreOTP()
+        // send mail with defined transport object
+        const info = await transporter.sendMail({
+            from: '"Web name" <22112005vivek@gmail.com>', // sender address
+            to: email, // list of receivers
+            subject: "Hello ✔", // Subject line
+            // text: `Your OTP is: ${OTP}`, // plain text body
+            html: `
+                <div style="font-family: 'Arial', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #4469D8; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+                <div style="background-color: #ffffff; padding: 20px; border-radius: 10px; margin-bottom: 15px;">
+                    <h4 style="color: #333; font-size: 24px; margin-bottom: 10px;">OTP for Your Account</h4>
+                    <p style="font-size: 14px; color: #666; margin-bottom: 20px;">Dear User,</p>
+                    <div style="display: inline-block; font-size: 18px; font-weight: bold; color: #fff; background-color: #4169E1; padding: 10px 20px; border-radius: 8px; margin-bottom: 15px; letter-spacing: 4px;">
+                        ${OTP}
+                    </div>
+                    <p style="font-size: 14px; color: #666; margin-bottom: 20px;">Your OTP for account verification.</p>
+                    <p style="font-size: 14px; color: #666; margin-bottom: 20px;">Please use this OTP to complete your email verification process.</p>
+                    <p style="font-size: 14px; color: #666; margin-bottom: 20px;">Note: This OTP is valid for 10 minutes.</p>
+                    <p style="font-size: 14px; color: #666;">Regards,<br/>Web name</p>
+                </div>
+                <p style="font-size: 12px; color: #fff; text-align: center;">This is an automated message. Please do not reply.</p>
+                </div>
+            `, // html body
+        
+        });
+    
+        console.log("Message sent: ", info.messageId);
+        // Message sent: <d786aa62-4e0a-070a-47ed-0b0666549519@ethereal.email>
+    }
+
+    OTPHandler()
+    res.sendStatus(200)
+})
+
+app.post("/verifyMailOTP", async(req, res) => {
+    const {email ,OTP} = req.body;
+    console.log(email, OTP)
+    
+    const result = await db.query("SELECT * FROM mail_otps WHERE email = $1 AND otp = $2", [email, OTP])
+    let verified = false;
+    if (result.rows.length > 0){
+        verified = true;
+    }
+    res.status(200).send({verified})
+})
+
+
 
 // --   fetching team/company name  --
 app.get("/getCompanyName", async(req, res) => {
@@ -413,9 +492,10 @@ app.get("/getCompanyName", async(req, res) => {
 
 app.get("/getTeamName", async(req, res) => {
     const teamCode = req.query.teamCode;
+    const companyCode = req.query.companyCode;
     // console.log("triggered");
     try{
-        const result = await db.query("SELECT * FROM team_details WHERE team_code = $1", [teamCode])
+        const result = await db.query("SELECT * FROM team_details WHERE team_code = $1 AND company_code = $2", [teamCode, companyCode])
         if(result.rows.length > 0){
             let name = result.rows[0].team_name;
             res.status(200).json({teamName: name})
